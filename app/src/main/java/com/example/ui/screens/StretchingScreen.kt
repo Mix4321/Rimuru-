@@ -23,6 +23,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Cameraswitch
+import androidx.compose.material.icons.rounded.CenterFocusStrong
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Info
@@ -90,12 +92,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -193,6 +198,9 @@ fun StretchingScreen(
         )
     }
     var stretchFeedback by remember { mutableStateOf(StretchFormFeedback()) }
+    var stretchRelockTick by remember { mutableIntStateOf(0) }
+    var stretchTapLockRequest by remember { mutableStateOf<StretchTapLockRequest?>(null) }
+    var stretchCameraBoxSize by remember { mutableStateOf(IntSize.Zero) }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -479,13 +487,34 @@ fun StretchingScreen(
                     .fillMaxWidth()
                     .height(if (useCameraCoach && hasCameraPerm) 340.dp else 290.dp)
             ) {
-                Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onSizeChanged { stretchCameraBoxSize = it }
+                        .pointerInput(useCameraCoach, hasCameraPerm) {
+                            if (useCameraCoach && hasCameraPerm) {
+                                detectTapGestures { offset ->
+                                    if (stretchCameraBoxSize.width > 0 && stretchCameraBoxSize.height > 0) {
+                                        stretchTapLockRequest = StretchTapLockRequest(
+                                            id = System.nanoTime(),
+                                            x = offset.x,
+                                            y = offset.y,
+                                            viewWidth = stretchCameraBoxSize.width.toFloat(),
+                                            viewHeight = stretchCameraBoxSize.height.toFloat()
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                ) {
                     if (useCameraCoach && hasCameraPerm) {
                         StretchCameraCoachPreview(
                             stretchType = currentExercise.animationType,
                             isLeftSideActive = !isSecondHalfOfBilateral,
                             sensitivity = appSettings.detectionSensitivity,
                             useFrontCamera = useFrontCamera,
+                            relockTick = stretchRelockTick,
+                            tapLockRequest = stretchTapLockRequest,
                             onStretchEvaluated = { stretchFeedback = it },
                             modifier = Modifier.fillMaxSize()
                         )
@@ -501,7 +530,7 @@ fun StretchingScreen(
                             color = ForestGreenDeep.copy(alpha = 0.9f),
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
-                                .padding(top = 56.dp, end = 12.dp)
+                                .padding(top = 68.dp, end = 12.dp)
                                 .size(width = 104.dp, height = 118.dp)
                         ) {
                             StretchAnimationCanvas(
@@ -585,17 +614,40 @@ fun StretchingScreen(
 
                             if (useCameraCoach && hasCameraPerm) {
                                 IconButton(
+                                    onClick = { stretchRelockTick++ },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (stretchFeedback.snapshot.isForeignPersonBlocked) {
+                                                AmberWarm.copy(alpha = 0.86f)
+                                            } else {
+                                                Color.Black.copy(alpha = 0.6f)
+                                            }
+                                        )
+                                        .testTag("stretch_relock_subject_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.CenterFocusStrong,
+                                        contentDescription = "ล็อกตัวผู้ยืดใหม่",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                IconButton(
                                     onClick = { useFrontCamera = !useFrontCamera },
                                     modifier = Modifier
-                                        .size(34.dp)
+                                        .size(48.dp)
                                         .clip(CircleShape)
                                         .background(Color.Black.copy(alpha = 0.6f))
+                                        .testTag("stretch_switch_camera_button")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.Cameraswitch,
                                         contentDescription = "สลับกล้อง",
                                         tint = Color.White,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
@@ -616,12 +668,54 @@ fun StretchingScreen(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         if (useCameraCoach && hasCameraPerm) {
+                            if (stretchFeedback.snapshot.isSubjectLocked || stretchFeedback.snapshot.isForeignPersonBlocked) {
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (stretchFeedback.snapshot.isForeignPersonBlocked) {
+                                        AmberWarm.copy(alpha = 0.9f)
+                                    } else {
+                                        ForestGreenDeep.copy(alpha = 0.8f)
+                                    },
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (stretchFeedback.snapshot.isForeignPersonBlocked) {
+                                            Color.White.copy(alpha = 0.65f)
+                                        } else {
+                                            MintBright.copy(alpha = 0.55f)
+                                        }
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.CenterFocusStrong,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Text(
+                                            text = if (stretchFeedback.snapshot.isForeignPersonBlocked) {
+                                                "กันคนเดินผ่าน • ล็อกตัวคุณไว้แล้ว"
+                                            } else {
+                                                "ล็อกตัวแล้ว • แตะตัวคุณเพื่อย้ายจุดล็อก"
+                                            },
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+
                             Surface(
                                 shape = RoundedCornerShape(999.dp),
-                                color = if (stretchFeedback.isPostureCorrect) {
-                                    EmeraldVibrant.copy(alpha = 0.92f)
-                                } else {
-                                    AmberWarm.copy(alpha = 0.92f)
+                                color = when {
+                                    stretchFeedback.snapshot.isForeignPersonBlocked -> AmberWarm.copy(alpha = 0.94f)
+                                    stretchFeedback.isPostureCorrect -> EmeraldVibrant.copy(alpha = 0.92f)
+                                    else -> AmberWarm.copy(alpha = 0.92f)
                                 }
                             ) {
                                 Row(
@@ -972,12 +1066,22 @@ fun StretchingScreen(
     }
 }
 
+private data class StretchTapLockRequest(
+    val id: Long,
+    val x: Float,
+    val y: Float,
+    val viewWidth: Float,
+    val viewHeight: Float
+)
+
 @Composable
 private fun StretchCameraCoachPreview(
     stretchType: StretchAnimationType,
     isLeftSideActive: Boolean,
     sensitivity: DetectionSensitivity,
     useFrontCamera: Boolean,
+    relockTick: Int,
+    tapLockRequest: StretchTapLockRequest?,
     onStretchEvaluated: (StretchFormFeedback) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1003,6 +1107,18 @@ private fun StretchCameraCoachPreview(
             isFrontCameraProvider = { activeFrontCamera.get() },
             onStretchEvaluated = onStretchEvaluated
         )
+    }
+
+    LaunchedEffect(relockTick) {
+        if (relockTick > 0) {
+            analyzer.relockPrimarySubject()
+        }
+    }
+
+    LaunchedEffect(tapLockRequest) {
+        tapLockRequest?.let { req ->
+            analyzer.lockSubjectAtTap(req.x, req.y, req.viewWidth, req.viewHeight)
+        }
     }
 
     DisposableEffect(Unit) {

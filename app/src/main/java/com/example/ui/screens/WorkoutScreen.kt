@@ -24,6 +24,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -39,6 +40,8 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,6 +55,7 @@ import androidx.compose.material.icons.rounded.Balance
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Cameraswitch
+import androidx.compose.material.icons.rounded.CenterFocusStrong
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.GpsFixed
@@ -88,6 +92,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -97,7 +102,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -105,6 +112,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -113,6 +121,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.camera.GeneralExerciseFocus
 import com.example.camera.PoseMotionAnalyzer
 import com.example.camera.PoseOverlayCanvas
 import com.example.data.local.AppSettings
@@ -176,6 +185,7 @@ fun WorkoutScreen(
 
     var showBelowMinimumDialog by remember { mutableStateOf(false) }
     var showConfirmExitDialog by remember { mutableStateOf(false) }
+    var selectedExerciseFocus by remember(uiState.sessionId) { mutableStateOf(GeneralExerciseFocus.AUTO) }
 
     val motionTracker = remember(context) {
         DeviceMotionTracker(
@@ -542,6 +552,34 @@ fun WorkoutScreen(
                 }
             }
 
+            if (uiState.sportType == SportType.GENERAL && uiState.trackingMode == TrackingMode.CAMERA_AI) {
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(GeneralExerciseFocus.entries) { focus ->
+                        FilterChip(
+                            selected = selectedExerciseFocus == focus,
+                            onClick = { selectedExerciseFocus = focus },
+                            label = {
+                                Text(
+                                    text = focus.thaiLabel,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            modifier = Modifier.testTag("exercise_focus_${focus.name}")
+                        )
+                    }
+                }
+            }
+
             if (isWide) {
                 Row(
                     modifier = Modifier
@@ -552,6 +590,7 @@ fun WorkoutScreen(
                     TrackingViewportCard(
                         uiState = uiState,
                         sensitivity = appSettings.detectionSensitivity,
+                        exerciseFocus = selectedExerciseFocus,
                         onMotionFrame = viewModel::onMotionFrame,
                         onToggleCameraLens = viewModel::toggleCameraLens,
                         onSelectManualEffort = viewModel::setManualEffort,
@@ -596,6 +635,7 @@ fun WorkoutScreen(
                     TrackingViewportCard(
                         uiState = uiState,
                         sensitivity = appSettings.detectionSensitivity,
+                        exerciseFocus = selectedExerciseFocus,
                         onMotionFrame = viewModel::onMotionFrame,
                         onToggleCameraLens = viewModel::toggleCameraLens,
                         onSelectManualEffort = viewModel::setManualEffort,
@@ -638,6 +678,7 @@ fun WorkoutScreen(
 private fun TrackingViewportCard(
     uiState: WorkoutUiState,
     sensitivity: DetectionSensitivity,
+    exerciseFocus: GeneralExerciseFocus,
     onMotionFrame: (com.example.camera.PoseSkeletonSnapshot) -> Unit,
     onToggleCameraLens: () -> Unit,
     onSelectManualEffort: (ManualEffortLevel) -> Unit,
@@ -653,11 +694,35 @@ private fun TrackingViewportCard(
     ) {
         when {
             uiState.trackingMode == TrackingMode.CAMERA_AI && uiState.cameraPermissionGranted -> {
-                Box(modifier = Modifier.fillMaxSize()) {
+                var relockTick by remember { mutableIntStateOf(0) }
+                var tapLockRequest by remember { mutableStateOf<WorkoutTapLockRequest?>(null) }
+                var cameraBoxSize by remember { mutableStateOf(IntSize.Zero) }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onSizeChanged { cameraBoxSize = it }
+                        .pointerInput(Unit) {
+                            detectTapGestures { offset ->
+                                if (cameraBoxSize.width > 0 && cameraBoxSize.height > 0) {
+                                    tapLockRequest = WorkoutTapLockRequest(
+                                        id = System.nanoTime(),
+                                        x = offset.x,
+                                        y = offset.y,
+                                        viewWidth = cameraBoxSize.width.toFloat(),
+                                        viewHeight = cameraBoxSize.height.toFloat()
+                                    )
+                                }
+                            }
+                        }
+                ) {
                     CameraPosePreview(
                         sportType = uiState.sportType,
                         sensitivity = currentSensitivityForCard,
+                        exerciseFocus = exerciseFocus,
                         useFrontCamera = uiState.useFrontCamera,
+                        relockTick = relockTick,
+                        tapLockRequest = tapLockRequest,
                         onMotionAnalyzed = onMotionFrame,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -667,7 +732,7 @@ private fun TrackingViewportCard(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Top status pill + lens toggle
+                    // Top status pill + subject re-lock & lens toggle
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -683,6 +748,8 @@ private fun TrackingViewportCard(
                                 shape = RoundedCornerShape(999.dp),
                                 color = when {
                                     !uiState.isRunning -> Color.Black.copy(alpha = 0.7f)
+                                    uiState.poseSnapshot.isForeignPersonBlocked ->
+                                        AmberWarm.copy(alpha = 0.94f)
                                     uiState.poseSnapshot.isBodyVisible && uiState.isCurrentlyMoving ->
                                         EmeraldVibrant.copy(alpha = 0.92f)
                                     uiState.poseSnapshot.isBodyVisible ->
@@ -704,71 +771,147 @@ private fun TrackingViewportCard(
 
                             Spacer(modifier = Modifier.width(8.dp))
 
-                            IconButton(
-                                onClick = onToggleCameraLens,
-                                modifier = Modifier
-                                    .clip(CircleShape)
-                                    .background(Color.Black.copy(alpha = 0.55f))
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Cameraswitch,
-                                    contentDescription = "สลับกล้องหน้า-หลัง",
-                                    tint = Color.White
-                                )
+                                IconButton(
+                                    onClick = { relockTick++ },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (uiState.poseSnapshot.isForeignPersonBlocked) {
+                                                AmberWarm.copy(alpha = 0.86f)
+                                            } else {
+                                                Color.Black.copy(alpha = 0.55f)
+                                            }
+                                        )
+                                        .testTag("relock_subject_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.CenterFocusStrong,
+                                        contentDescription = "ล็อกตัวผู้เล่นใหม่",
+                                        tint = Color.White
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = onToggleCameraLens,
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.55f))
+                                        .testTag("switch_camera_lens_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Cameraswitch,
+                                        contentDescription = "สลับกล้องหน้า-หลัง",
+                                        tint = Color.White
+                                    )
+                                }
                             }
                         }
 
-                        // AI Form % & Symmetry % Live Badges
-                        androidx.compose.animation.AnimatedVisibility(visible = uiState.poseSnapshot.isBodyVisible) {
+                        // Subject Lock + AI Form % & Symmetry % Live Badges
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = uiState.poseSnapshot.isBodyVisible ||
+                                uiState.poseSnapshot.isSubjectLocked ||
+                                uiState.poseSnapshot.isForeignPersonBlocked
+                        ) {
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = Color.Black.copy(alpha = 0.58f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                if (uiState.poseSnapshot.isSubjectLocked) {
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = if (uiState.poseSnapshot.isForeignPersonBlocked) {
+                                            AmberWarm.copy(alpha = 0.88f)
+                                        } else {
+                                            ForestGreenDeep.copy(alpha = 0.78f)
+                                        },
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (uiState.poseSnapshot.isForeignPersonBlocked) {
+                                                Color.White.copy(alpha = 0.65f)
+                                            } else {
+                                                MintBright.copy(alpha = 0.6f)
+                                            }
+                                        )
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.AutoAwesome,
-                                            contentDescription = null,
-                                            tint = MintBright,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Text(
-                                            text = "ฟอร์ม ${uiState.formScorePercent}%",
-                                            color = Color.White,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.CenterFocusStrong,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Text(
+                                                text = if (uiState.poseSnapshot.isForeignPersonBlocked) {
+                                                    "กันคนเดินผ่าน • ล็อกตัวคุณ"
+                                                } else {
+                                                    "ล็อกตัวแล้ว • แตะเพื่อย้ายจุด"
+                                                },
+                                                color = Color.White,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
                                     }
                                 }
 
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = Color.Black.copy(alpha = 0.58f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                if (uiState.poseSnapshot.isBodyVisible) {
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = Color.Black.copy(alpha = 0.58f)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Balance,
-                                            contentDescription = null,
-                                            tint = if (uiState.symmetryPercent >= 85) MintBright else AmberWarm,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Text(
-                                            text = "สมดุล ${uiState.symmetryPercent}%",
-                                            color = Color.White,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.AutoAwesome,
+                                                contentDescription = null,
+                                                tint = MintBright,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = "ฟอร์ม ${uiState.formScorePercent}%",
+                                                color = Color.White,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = Color.Black.copy(alpha = 0.58f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Balance,
+                                                contentDescription = null,
+                                                tint = if (uiState.symmetryPercent >= 85) MintBright else AmberWarm,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = "สมดุล ${uiState.symmetryPercent}%",
+                                                color = Color.White,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1093,11 +1236,22 @@ private fun SensorGpsStatusContent(
     }
 }
 
+private data class WorkoutTapLockRequest(
+    val id: Long,
+    val x: Float,
+    val y: Float,
+    val viewWidth: Float,
+    val viewHeight: Float
+)
+
 @Composable
 private fun CameraPosePreview(
     sportType: SportType,
     sensitivity: DetectionSensitivity,
+    exerciseFocus: GeneralExerciseFocus,
     useFrontCamera: Boolean,
+    relockTick: Int,
+    tapLockRequest: WorkoutTapLockRequest?,
     onMotionAnalyzed: (com.example.camera.PoseSkeletonSnapshot) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1111,6 +1265,7 @@ private fun CameraPosePreview(
     }
     val currentSport by rememberUpdatedState(sportType)
     val currentSensitivity by rememberUpdatedState(sensitivity)
+    val currentFocus by rememberUpdatedState(exerciseFocus)
     val activeFrontCamera = remember { java.util.concurrent.atomic.AtomicBoolean(useFrontCamera) }
     val boundProviderRef = remember { java.util.concurrent.atomic.AtomicReference<ProcessCameraProvider?>(null) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -1119,8 +1274,21 @@ private fun CameraPosePreview(
             sportProvider = { currentSport },
             sensitivityProvider = { currentSensitivity },
             isFrontCameraProvider = { activeFrontCamera.get() },
+            exerciseFocusProvider = { currentFocus },
             onMotionAnalyzed = onMotionAnalyzed
         )
+    }
+
+    LaunchedEffect(relockTick) {
+        if (relockTick > 0) {
+            poseAnalyzer.relockPrimarySubject()
+        }
+    }
+
+    LaunchedEffect(tapLockRequest) {
+        tapLockRequest?.let { req ->
+            poseAnalyzer.lockSubjectAtTap(req.x, req.y, req.viewWidth, req.viewHeight)
+        }
     }
 
     DisposableEffect(Unit) {
