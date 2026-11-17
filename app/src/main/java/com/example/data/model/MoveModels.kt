@@ -3,13 +3,14 @@ package com.example.data.model
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-enum class TrackingMode(val thaiLabel: String) {
-    CAMERA_AI("ตรวจจับด้วยกล้อง AI"),
-    MANUAL("บันทึกด้วยตนเอง");
+enum class TrackingMode(val thaiLabel: String, val shortLabel: String) {
+    CAMERA_AI("ตรวจจับด้วยกล้อง AI", "กล้อง AI"),
+    SENSOR_GPS("เซนเซอร์ก้าว & GPS", "เซนเซอร์/GPS"),
+    MANUAL("บันทึกด้วยตนเอง", "กำหนดเอง");
 
     companion object {
         fun fromNameSafe(raw: String?): TrackingMode =
-            entries.firstOrNull { it.name == raw } ?: MANUAL
+            entries.firstOrNull { it.name == raw } ?: SENSOR_GPS
     }
 }
 
@@ -19,6 +20,7 @@ data class UserProfile(
     val userId: String = LOCAL_PROFILE_ID,
     val displayName: String = "นักกีฬา MOVE",
     val dailyGoalMinutes: Int = 30,
+    val weightKg: Float = 65f,
     val currentStreak: Int = 0,
     val longestStreak: Int = 0,
     val lastActiveDate: String = "",
@@ -38,6 +40,7 @@ data class WorkoutSession(
     val caloriesBurned: Int = 0,
     val steps: Int = 0,
     val distanceMeters: Int = 0,
+    val repsCount: Int = 0,
     val trackingMode: String = TrackingMode.MANUAL.name,
     val motionActiveSeconds: Int = 0,
     val activityDate: String = "",
@@ -54,11 +57,13 @@ data class WorkoutSession(
 data class ActiveWorkoutDraft(
     val sessionId: String,
     val sportType: SportType,
+    val trackingMode: TrackingMode = sportType.defaultTrackingMode,
     val startedAtMillis: Long,
     val elapsedSeconds: Int,
     val motionActiveSeconds: Int,
     val steps: Int,
     val distanceMeters: Int,
+    val repsCount: Int = 0,
     val caloriesExact: Double,
     val isRunning: Boolean,
     val lastSavedEpochMillis: Long

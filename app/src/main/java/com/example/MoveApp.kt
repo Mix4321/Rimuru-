@@ -62,6 +62,7 @@ import com.example.data.firebase.WorkoutDraftStore
 import com.example.data.local.MoveRepository
 import com.example.data.local.MoveRoomDatabase
 import com.example.data.model.SportType
+import com.example.data.model.TrackingMode
 import com.example.data.model.UiState
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.HistoryScreen
@@ -84,6 +85,7 @@ data object HistoryRoute
 @Serializable
 data class WorkoutRoute(
     val sportName: String,
+    val trackingModeName: String = "",
     val resumeDraft: Boolean = false
 )
 
@@ -273,13 +275,23 @@ fun AppNavigation() {
                                     data = data,
                                     onStartExerciseClick = { navigateTopLevel(TopLevelTab.SPORTS) },
                                     onQuickStartSport = { sport ->
-                                        navController.navigate(WorkoutRoute(sportName = sport.name, resumeDraft = false))
+                                        navController.navigate(
+                                            WorkoutRoute(
+                                                sportName = sport.name,
+                                                trackingModeName = sport.defaultTrackingMode.name,
+                                                resumeDraft = false
+                                            )
+                                        )
                                     },
                                     onUpdateDailyGoal = dashboardViewModel::updateDailyGoal,
-                                    onUpdateDisplayName = dashboardViewModel::updateDisplayName,
+                                    onUpdateProfile = dashboardViewModel::updateProfile,
                                     onResumeDraft = { draft ->
                                         navController.navigate(
-                                            WorkoutRoute(sportName = draft.sportType.name, resumeDraft = true)
+                                            WorkoutRoute(
+                                                sportName = draft.sportType.name,
+                                                trackingModeName = draft.trackingMode.name,
+                                                resumeDraft = true
+                                            )
                                         )
                                     },
                                     onDiscardDraft = dashboardViewModel::discardPendingDraft,
@@ -290,8 +302,14 @@ fun AppNavigation() {
 
                         composable<SportsRoute> {
                             SportSelectionScreen(
-                                onBeginWorkout = { sport ->
-                                    navController.navigate(WorkoutRoute(sportName = sport.name, resumeDraft = false))
+                                onBeginWorkout = { sport, mode ->
+                                    navController.navigate(
+                                        WorkoutRoute(
+                                            sportName = sport.name,
+                                            trackingModeName = mode.name,
+                                            resumeDraft = false
+                                        )
+                                    )
                                 }
                             )
                         }
@@ -328,7 +346,11 @@ fun AppNavigation() {
                                 if (routeArgs.resumeDraft && draft != null) {
                                     workoutViewModel.restoreFromDraft(draft)
                                 } else {
-                                    workoutViewModel.startFreshSession(sport)
+                                    val selectedMode = routeArgs.trackingModeName
+                                        .takeIf { it.isNotBlank() }
+                                        ?.let { TrackingMode.fromNameSafe(it) }
+                                        ?: sport.defaultTrackingMode
+                                    workoutViewModel.startFreshSession(sport, selectedMode)
                                 }
                             }
 

@@ -77,7 +77,7 @@ fun DashboardScreen(
     onStartExerciseClick: () -> Unit,
     onQuickStartSport: (SportType) -> Unit,
     onUpdateDailyGoal: (Int) -> Unit,
-    onUpdateDisplayName: (String) -> Unit,
+    onUpdateProfile: (String, Float) -> Unit,
     onResumeDraft: (ActiveWorkoutDraft) -> Unit,
     onDiscardDraft: () -> Unit,
     onViewHistory: () -> Unit,
@@ -99,6 +99,7 @@ fun DashboardScreen(
 
     if (showProfileDialog) {
         var nameInput by remember(data.profile.displayName) { mutableStateOf(data.profile.displayName) }
+        var weightInput by remember(data.profile.weightKg) { mutableStateOf(data.profile.weightKg.toInt().toString()) }
         AlertDialog(
             onDismissRequest = { showProfileDialog = false },
             title = { Text("โปรไฟล์ผู้ใช้") },
@@ -108,6 +109,13 @@ fun DashboardScreen(
                         value = nameInput,
                         onValueChange = { nameInput = it },
                         label = { Text("ชื่อที่แสดงในแอป") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = weightInput,
+                        onValueChange = { raw -> weightInput = raw.filter { it.isDigit() || it == '.' }.take(5) },
+                        label = { Text("น้ำหนักตัว (กิโลกรัม) — ใช้คำนวณแคลอรีจริง") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -122,7 +130,8 @@ fun DashboardScreen(
                 Button(
                     onClick = {
                         showProfileDialog = false
-                        onUpdateDisplayName(nameInput)
+                        val parsedWeight = weightInput.toFloatOrNull() ?: data.profile.weightKg
+                        onUpdateProfile(nameInput, parsedWeight)
                     }
                 ) {
                     Text("บันทึก")

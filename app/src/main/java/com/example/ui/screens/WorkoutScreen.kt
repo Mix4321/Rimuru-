@@ -1,17 +1,23 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import android.util.Size
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
@@ -43,10 +49,15 @@ import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Cameraswitch
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.EditNote
+import androidx.compose.material.icons.rounded.GpsFixed
+import androidx.compose.material.icons.rounded.GpsNotFixed
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Route
+import androidx.compose.material.icons.rounded.Sensors
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -62,6 +73,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -95,6 +109,8 @@ import com.example.camera.PoseMotionAnalyzer
 import com.example.camera.PoseOverlayCanvas
 import com.example.data.model.TrackingMode
 import com.example.domain.DateStreakUtils
+import com.example.sensors.DeviceMotionTracker
+import com.example.sensors.LocationDistanceTracker
 import com.example.ui.components.MetricTile
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CoralError
@@ -105,7 +121,22 @@ import com.example.ui.theme.MintBright
 import com.example.ui.viewmodel.ManualEffortLevel
 import com.example.ui.viewmodel.WorkoutUiState
 import com.example.ui.viewmodel.WorkoutViewModel
+import java.util.Locale
 import java.util.concurrent.Executors
+
+private fun checkCameraPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+private fun checkLocationPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+private fun checkActivityPermission(context: Context): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED
+    } else {
+        true
+    }
 
 @Composable
 fun WorkoutScreen(
@@ -118,24 +149,130 @@ fun WorkoutScreen(
     var showBelowMinimumDialog by remember { mutableStateOf(false) }
     var showConfirmExitDialog by remember { mutableStateOf(false) }
 
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        viewModel.onCameraPermissionResult(granted)
+    val motionTracker = remember(context) {
+        DeviceMotionTracker(
+            context = context,
+            onStepDetected = viewModel::onSensorStepDetected,
+            onJumpRepDetected = viewModel::onSensorJumpRepDetected,
+            onMotionStateChanged = viewModel::onSensorMotionStateChanged
+        )
     }
 
-    LaunchedEffect(Unit) {
-        if (!uiState.cameraPermissionAsked) {
-            val alreadyGranted = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
-            if (alreadyGranted) {
-                viewModel.onCameraPermissionResult(true)
+    val locationTracker = remember(context) {
+        LocationDistanceTracker(
+            context = context,
+            onDistanceAddedMeters = viewModel::onGpsDistanceAdded,
+            onGpsStateChanged = viewModel::onGpsStateChanged
+        )
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            motionTracker.stop()
+            locationTracker.stop()
+        }
+    }
+
+    // Activate or stop hardware sensors & GPS cleanly based on current tracking mode & permissions
+    LaunchedEffect(
+        uiState.trackingMode,
+        uiState.locationPermissionGranted,
+        uiState.activityPermissionGranted,
+        uiState.saveOutcome
+    ) {
+        if (uiState.saveOutcome != null) {
+            motionTracker.stop()
+            locationTracker.stop()
+            return@LaunchedEffect
+        }
+
+        if (uiState.trackingMode == TrackingMode.SENSOR_GPS) {
+            motionTracker.start()
+            if (uiState.sportType.supportsDistance) {
+                locationTracker.start()
             } else {
-                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                locationTracker.stop()
+            }
+        } else {
+            motionTracker.stop()
+            locationTracker.stop()
+        }
+    }
+
+    val multiPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        val cam = checkCameraPermission(context)
+        val loc = checkLocationPermission(context)
+        val act = checkActivityPermission(context)
+        viewModel.updatePermissionStates(
+            cameraGranted = cam,
+            locationGranted = loc,
+            activityGranted = act,
+            autoStartIfFirstTime = !uiState.hasStartedOnce
+        )
+    }
+
+    val cameraOnlyLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        viewModel.updatePermissionStates(
+            cameraGranted = granted,
+            locationGranted = checkLocationPermission(context),
+            activityGranted = checkActivityPermission(context),
+            autoStartIfFirstTime = false
+        )
+        if (granted) {
+            viewModel.switchTrackingMode(TrackingMode.CAMERA_AI)
+        }
+    }
+
+    // Initial permission evaluation based on selected mode
+    LaunchedEffect(uiState.sessionId) {
+        if (uiState.sessionId.isBlank() || uiState.permissionsEvaluated) return@LaunchedEffect
+
+        val cam = checkCameraPermission(context)
+        val loc = checkLocationPermission(context)
+        val act = checkActivityPermission(context)
+
+        val missingToRequest = buildList {
+            if (uiState.trackingMode == TrackingMode.CAMERA_AI && !cam) {
+                add(Manifest.permission.CAMERA)
+            }
+            if (uiState.trackingMode == TrackingMode.SENSOR_GPS) {
+                if (uiState.sportType.supportsDistance && !loc) {
+                    add(Manifest.permission.ACCESS_FINE_LOCATION)
+                    add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !act) {
+                    add(Manifest.permission.ACTIVITY_RECOGNITION)
+                }
             }
         }
+
+        if (missingToRequest.isEmpty()) {
+            viewModel.updatePermissionStates(
+                cameraGranted = cam,
+                locationGranted = loc,
+                activityGranted = act,
+                autoStartIfFirstTime = !uiState.hasStartedOnce
+            )
+        } else {
+            multiPermissionLauncher.launch(missingToRequest.toTypedArray())
+        }
+    }
+
+    // Re-check permissions automatically if user returned from Android Settings
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        val cam = checkCameraPermission(context)
+        val loc = checkLocationPermission(context)
+        val act = checkActivityPermission(context)
+        viewModel.updatePermissionStates(
+            cameraGranted = cam,
+            locationGranted = loc,
+            activityGranted = act,
+            autoStartIfFirstTime = false
+        )
     }
 
     // Persist active workout draft if user leaves app or locks screen mid-workout
@@ -143,7 +280,6 @@ fun WorkoutScreen(
         viewModel.persistDraftAsync()
     }
 
-    // Intercept system back button during an active/unsaved workout
     BackHandler(enabled = uiState.saveOutcome == null) {
         showConfirmExitDialog = true
     }
@@ -185,6 +321,8 @@ fun WorkoutScreen(
                 TextButton(
                     onClick = {
                         showBelowMinimumDialog = false
+                        motionTracker.stop()
+                        locationTracker.stop()
                         viewModel.discardAndClearSession()
                         onExitToDashboard()
                     },
@@ -209,6 +347,8 @@ fun WorkoutScreen(
                 Button(
                     onClick = {
                         showConfirmExitDialog = false
+                        motionTracker.stop()
+                        locationTracker.stop()
                         viewModel.pauseTimer()
                         onExitToDashboard()
                     }
@@ -220,6 +360,8 @@ fun WorkoutScreen(
                 TextButton(
                     onClick = {
                         showConfirmExitDialog = false
+                        motionTracker.stop()
+                        locationTracker.stop()
                         viewModel.discardAndClearSession()
                         onExitToDashboard()
                     }
@@ -247,11 +389,11 @@ fun WorkoutScreen(
         val isWide = maxWidth >= 720.dp
 
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top bar
+            // Top Header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -277,54 +419,93 @@ fun WorkoutScreen(
                     }
                 }
 
-                // Switch Camera / Mode pill
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (uiState.cameraPermissionGranted) {
-                        FilterChip(
-                            selected = uiState.trackingMode == TrackingMode.CAMERA_AI,
-                            onClick = {
-                                val next = if (uiState.trackingMode == TrackingMode.CAMERA_AI) {
-                                    TrackingMode.MANUAL
-                                } else {
-                                    TrackingMode.CAMERA_AI
-                                }
-                                viewModel.switchTrackingMode(next)
-                            },
-                            label = {
-                                Text(
-                                    if (uiState.trackingMode == TrackingMode.CAMERA_AI) "โหมดกล้อง AI" else "โหมดกำหนดเอง"
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = if (uiState.trackingMode == TrackingMode.CAMERA_AI) {
-                                        Icons.Rounded.CameraAlt
-                                    } else {
-                                        Icons.Rounded.EditNote
-                                    },
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.primary
-                            )
-                        )
-                    } else {
-                        OutlinedButton(
-                            onClick = {
-                                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                    data = Uri.fromParts("package", context.packageName, null)
-                                }
-                                context.startActivity(intent)
-                            }
-                        ) {
-                            Icon(Icons.Rounded.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("เปิดสิทธิ์กล้อง")
-                        }
+                if (!uiState.cameraPermissionGranted && uiState.trackingMode != TrackingMode.CAMERA_AI) {
+                    OutlinedButton(
+                        onClick = { cameraOnlyLauncher.launch(Manifest.permission.CAMERA) }
+                    ) {
+                        Icon(Icons.Rounded.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("ใช้กล้อง AI")
                     }
+                }
+            }
+
+            // 3-Mode Tracking Selector (Camera AI | Sensor & GPS | Manual)
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
+                TrackingMode.entries.forEachIndexed { index, mode ->
+                    SegmentedButton(
+                        selected = uiState.trackingMode == mode,
+                        onClick = {
+                            if (mode == TrackingMode.CAMERA_AI && !uiState.cameraPermissionGranted) {
+                                cameraOnlyLauncher.launch(Manifest.permission.CAMERA)
+                            } else {
+                                if (mode == TrackingMode.SENSOR_GPS) {
+                                    val needed = buildList {
+                                        if (uiState.sportType.supportsDistance && !uiState.locationPermissionGranted) {
+                                            add(Manifest.permission.ACCESS_FINE_LOCATION)
+                                            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                                        }
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !uiState.activityPermissionGranted) {
+                                            add(Manifest.permission.ACTIVITY_RECOGNITION)
+                                        }
+                                    }
+                                    if (needed.isNotEmpty()) {
+                                        multiPermissionLauncher.launch(needed.toTypedArray())
+                                    }
+                                }
+                                viewModel.switchTrackingMode(mode)
+                            }
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = TrackingMode.entries.size
+                        ),
+                        icon = {
+                            Icon(
+                                imageVector = when (mode) {
+                                    TrackingMode.CAMERA_AI -> Icons.Rounded.CameraAlt
+                                    TrackingMode.SENSOR_GPS -> Icons.Rounded.Sensors
+                                    TrackingMode.MANUAL -> Icons.Rounded.EditNote
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    ) {
+                        Text(
+                            text = mode.shortLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+
+            val openAppSettings = {
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", context.packageName, null)
+                }
+                context.startActivity(intent)
+            }
+
+            val requestSensorPermissions = {
+                val needed = buildList {
+                    if (!uiState.locationPermissionGranted) {
+                        add(Manifest.permission.ACCESS_FINE_LOCATION)
+                        add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !uiState.activityPermissionGranted) {
+                        add(Manifest.permission.ACTIVITY_RECOGNITION)
+                    }
+                }
+                if (needed.isNotEmpty()) {
+                    multiPermissionLauncher.launch(needed.toTypedArray())
+                } else {
+                    openAppSettings()
                 }
             }
 
@@ -340,6 +521,8 @@ fun WorkoutScreen(
                         onMotionFrame = viewModel::onMotionFrame,
                         onToggleCameraLens = viewModel::toggleCameraLens,
                         onSelectManualEffort = viewModel::setManualEffort,
+                        onRequestSensorPermissions = requestSensorPermissions,
+                        onOpenAppSettings = openAppSettings,
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxSize()
@@ -357,8 +540,13 @@ fun WorkoutScreen(
                                 else viewModel.startOrResumeTimer()
                             },
                             onFinishClick = {
-                                if (uiState.canSaveWorkout) viewModel.saveWorkout()
-                                else showBelowMinimumDialog = true
+                                if (uiState.canSaveWorkout) {
+                                    motionTracker.stop()
+                                    locationTracker.stop()
+                                    viewModel.saveWorkout()
+                                } else {
+                                    showBelowMinimumDialog = true
+                                }
                             }
                         )
                     }
@@ -376,9 +564,17 @@ fun WorkoutScreen(
                         onMotionFrame = viewModel::onMotionFrame,
                         onToggleCameraLens = viewModel::toggleCameraLens,
                         onSelectManualEffort = viewModel::setManualEffort,
+                        onRequestSensorPermissions = requestSensorPermissions,
+                        onOpenAppSettings = openAppSettings,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(270.dp)
+                            .height(
+                                when (uiState.trackingMode) {
+                                    TrackingMode.CAMERA_AI -> 390.dp
+                                    TrackingMode.SENSOR_GPS -> 240.dp
+                                    TrackingMode.MANUAL -> 220.dp
+                                }
+                            )
                     )
 
                     WorkoutMetricsAndControls(
@@ -388,8 +584,13 @@ fun WorkoutScreen(
                             else viewModel.startOrResumeTimer()
                         },
                         onFinishClick = {
-                            if (uiState.canSaveWorkout) viewModel.saveWorkout()
-                            else showBelowMinimumDialog = true
+                            if (uiState.canSaveWorkout) {
+                                motionTracker.stop()
+                                locationTracker.stop()
+                                viewModel.saveWorkout()
+                            } else {
+                                showBelowMinimumDialog = true
+                            }
                         }
                     )
                 }
@@ -404,6 +605,8 @@ private fun TrackingViewportCard(
     onMotionFrame: (com.example.camera.PoseSkeletonSnapshot) -> Unit,
     onToggleCameraLens: () -> Unit,
     onSelectManualEffort: (ManualEffortLevel) -> Unit,
+    onRequestSensorPermissions: () -> Unit,
+    onOpenAppSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -411,152 +614,344 @@ private fun TrackingViewportCard(
         colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
         modifier = modifier
     ) {
-        if (uiState.cameraPermissionGranted && uiState.trackingMode == TrackingMode.CAMERA_AI) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                CameraPosePreview(
-                    useFrontCamera = uiState.useFrontCamera,
-                    onMotionAnalyzed = onMotionFrame,
-                    modifier = Modifier.fillMaxSize()
-                )
+        when {
+            uiState.trackingMode == TrackingMode.CAMERA_AI && uiState.cameraPermissionGranted -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    CameraPosePreview(
+                        useFrontCamera = uiState.useFrontCamera,
+                        onMotionAnalyzed = onMotionFrame,
+                        modifier = Modifier.fillMaxSize()
+                    )
 
-                PoseOverlayCanvas(
-                    snapshot = uiState.poseSnapshot,
-                    modifier = Modifier.fillMaxSize()
-                )
+                    PoseOverlayCanvas(
+                        snapshot = uiState.poseSnapshot,
+                        modifier = Modifier.fillMaxSize()
+                    )
 
-                // Top status pill + lens toggle
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = if (uiState.isCurrentlyMoving) {
-                            EmeraldVibrant.copy(alpha = 0.9f)
-                        } else {
-                            Color.Black.copy(alpha = 0.65f)
-                        }
-                    ) {
-                        Text(
-                            text = when {
-                                !uiState.isRunning -> "หยุดชั่วคราว"
-                                uiState.isCurrentlyMoving -> "กำลังเคลื่อนไหว • AI Pose Active"
-                                else -> "กำลังค้นหาการเคลื่อนไหว..."
-                            },
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onToggleCameraLens,
+                    // Top status pill + lens toggle
+                    Row(
                         modifier = Modifier
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.5f))
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Cameraswitch,
-                            contentDescription = "สลับกล้องหน้า-หลัง",
-                            tint = Color.White
-                        )
-                    }
-                }
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = when {
+                                !uiState.isRunning -> Color.Black.copy(alpha = 0.7f)
+                                uiState.poseSnapshot.isBodyVisible && uiState.isCurrentlyMoving ->
+                                    EmeraldVibrant.copy(alpha = 0.92f)
+                                uiState.poseSnapshot.isBodyVisible ->
+                                    ForestGreen.copy(alpha = 0.88f)
+                                else -> Color.Black.copy(alpha = 0.72f)
+                            }
+                        ) {
+                            Text(
+                                text = when {
+                                    !uiState.isRunning -> "หยุดชั่วคราว"
+                                    else -> uiState.poseSnapshot.postureHint
+                                },
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
 
-                // No motion guidance alert
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = uiState.showAdjustCameraTip,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(12.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = AmberWarm.copy(alpha = 0.95f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        IconButton(
+                            onClick = onToggleCameraLens,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.55f))
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.WarningAmber,
-                                contentDescription = null,
+                                imageVector = Icons.Rounded.Cameraswitch,
+                                contentDescription = "สลับกล้องหน้า-หลัง",
                                 tint = Color.White
                             )
-                            Text(
-                                text = "ไม่พบการเคลื่อนไหว กรุณาปรับตำแหน่งกล้องให้เห็นร่างกายชัดเจน",
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelLarge
-                            )
+                        }
+                    }
+
+                    // No body / idle guidance alert
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = uiState.showAdjustCameraTip && uiState.isRunning,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(12.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = AmberWarm.copy(alpha = 0.95f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.WarningAmber,
+                                    contentDescription = null,
+                                    tint = Color.White
+                                )
+                                Text(
+                                    text = if (!uiState.poseSnapshot.isBodyVisible) {
+                                        "ไม่พบตัวในกล้อง กรุณาตั้งมือถือให้เห็นร่างกายชัดเจน"
+                                    } else {
+                                        "พบตัวแล้วแต่ยังนิ่งอยู่ — ขยับร่างกายเพื่อเริ่มนับและเผาผลาญแคลอรี"
+                                    },
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
                         }
                     }
                 }
             }
-        } else {
-            // Manual Mode Fallback (Camera Denied or User Switched to Manual)
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = MintBright.copy(alpha = 0.2f)
-                ) {
-                    Text(
-                        text = if (!uiState.cameraPermissionGranted) {
-                            "โหมดบันทึกด้วยตนเอง (ไม่ใช้กล้อง)"
-                        } else {
-                            "โหมดบันทึกด้วยตนเอง"
-                        },
-                        color = MintBright,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                    )
-                }
 
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            uiState.trackingMode == TrackingMode.CAMERA_AI && !uiState.cameraPermissionGranted -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     Icon(
-                        imageVector = uiState.sportType.icon,
+                        imageVector = Icons.Rounded.CameraAlt,
                         contentDescription = null,
                         tint = MintBright,
-                        modifier = Modifier.size(52.dp)
+                        modifier = Modifier.size(44.dp)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "เลือกระดับความหนักของการออกกำลังกาย",
+                        text = "ต้องอนุญาตสิทธิ์กล้องเพื่อตรวจจับโครงกระดูก AI",
                         color = Color.White,
                         style = MaterialTheme.typography.titleMedium,
                         textAlign = TextAlign.Center
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(onClick = onOpenAppSettings) {
+                        Text("เปิดสิทธิ์กล้องในการตั้งค่า")
+                    }
                 }
+            }
 
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            uiState.trackingMode == TrackingMode.SENSOR_GPS -> {
+                SensorGpsStatusContent(
+                    uiState = uiState,
+                    onRequestPermissions = onRequestSensorPermissions
+                )
+            }
+
+            else -> {
+                // Explicit Manual Mode
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    ManualEffortLevel.entries.forEach { level ->
-                        val selected = uiState.manualEffort == level
-                        FilterChip(
-                            selected = selected,
-                            onClick = { onSelectManualEffort(level) },
-                            label = { Text(level.thaiLabel) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MintBright,
-                                selectedLabelColor = ForestGreenDeep,
-                                containerColor = Color.White.copy(alpha = 0.14f),
-                                labelColor = Color.White
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = MintBright.copy(alpha = 0.2f)
+                    ) {
+                        Text(
+                            text = "โหมดบันทึกด้วยตนเอง (คำนวณจากเวลาและความหนัก)",
+                            color = MintBright,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                    }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = uiState.sportType.icon,
+                            contentDescription = null,
+                            tint = MintBright,
+                            modifier = Modifier.size(46.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "เลือกระดับความหนักของการออกกำลังกาย",
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ManualEffortLevel.entries.forEach { level ->
+                            val selected = uiState.manualEffort == level
+                            FilterChip(
+                                selected = selected,
+                                onClick = { onSelectManualEffort(level) },
+                                label = { Text(level.thaiLabel) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MintBright,
+                                    selectedLabelColor = ForestGreenDeep,
+                                    containerColor = Color.White.copy(alpha = 0.14f),
+                                    labelColor = Color.White
+                                )
                             )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SensorGpsStatusContent(
+    uiState: WorkoutUiState,
+    onRequestPermissions: () -> Unit
+) {
+    val gps = uiState.gpsSnapshot
+    val sensor = uiState.sensorSnapshot
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(18.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = if (uiState.isRunning && uiState.isCurrentlyMoving) {
+                    EmeraldVibrant.copy(alpha = 0.9f)
+                } else {
+                    Color.White.copy(alpha = 0.14f)
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Sensors,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = when {
+                            !uiState.isRunning -> "หยุดชั่วคราว"
+                            uiState.isCurrentlyMoving -> "กำลังตรวจจับการเคลื่อนไหวจริง"
+                            else -> "นิ่งอยู่ — ขยับตัวหรือเริ่มเดิน/วิ่ง"
+                        },
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+
+            if (uiState.sportType.supportsDistance) {
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = Color.White.copy(alpha = 0.14f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (gps.hasFix) Icons.Rounded.GpsFixed else Icons.Rounded.GpsNotFixed,
+                            contentDescription = null,
+                            tint = if (gps.hasFix) MintBright else AmberWarm,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = when {
+                                !gps.hasLocationPermission -> "ไม่มีสิทธิ์ GPS"
+                                !gps.isGpsEnabled -> "GPS ปิดอยู่"
+                                gps.hasFix -> "GPS ±${(gps.accuracyMeters ?: 0f).toInt()}ม."
+                                else -> "กำลังจับสัญญาณ GPS..."
+                            },
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall
                         )
                     }
                 }
             }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = sensor.sensorSourceLabel,
+                    color = MintBright,
+                    style = MaterialTheme.typography.labelLarge
+                )
+                if (uiState.sportType.supportsDistance) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Speed,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = String.format(Locale.US, "%.1f กม./ชม.", gps.currentSpeedKmh),
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            LinearProgressIndicator(
+                progress = { uiState.currentIntensity.coerceIn(0f, 1f) },
+                color = MintBright,
+                trackColor = Color.White.copy(alpha = 0.18f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(999.dp))
+            )
+            Text(
+                text = "ระดับแรงสั่นสะเทือน/การเคลื่อนไหวจริง: ${(uiState.currentIntensity * 100).toInt()}%",
+                color = Color.White.copy(alpha = 0.8f),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+
+        val needsPermPrompt = (uiState.sportType.supportsDistance && !uiState.locationPermissionGranted) ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !uiState.activityPermissionGranted)
+
+        if (needsPermPrompt) {
+            OutlinedButton(
+                onClick = onRequestPermissions,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("อนุญาตสิทธิ์ GPS / ตัวนับก้าวเพื่อให้วัดแม่นยำ", color = MintBright)
+            }
+        } else {
+            Text(
+                text = if (uiState.sportType.supportsDistance && !gps.hasFix) {
+                    "คำนวณระยะทางจากจำนวนก้าวจริงระหว่างรอสัญญาณ GPS (เหมาะสำหรับในอาคาร/ลู่วิ่ง)"
+                } else {
+                    "พกมือถือติดตัวขณะออกกำลังกาย ระบบจะนับก้าว ระยะทาง และแคลอรีจากการเคลื่อนไหวจริงเท่านั้น"
+                },
+                color = Color.White.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }
@@ -572,18 +967,24 @@ private fun CameraPosePreview(
     val previewView = remember {
         PreviewView(context).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
+    val activeFrontCamera = remember { java.util.concurrent.atomic.AtomicBoolean(useFrontCamera) }
+    val boundProviderRef = remember { java.util.concurrent.atomic.AtomicReference<ProcessCameraProvider?>(null) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val poseAnalyzer = remember {
         PoseMotionAnalyzer(
-            isFrontCameraProvider = { useFrontCamera },
+            isFrontCameraProvider = { activeFrontCamera.get() },
             onMotionAnalyzed = onMotionAnalyzed
         )
     }
 
     DisposableEffect(Unit) {
         onDispose {
+            runCatching {
+                boundProviderRef.get()?.unbindAll()
+            }
             poseAnalyzer.close()
             analysisExecutor.shutdown()
         }
@@ -594,6 +995,7 @@ private fun CameraPosePreview(
         providerFuture.addListener({
             try {
                 val cameraProvider = providerFuture.get()
+                boundProviderRef.set(cameraProvider)
                 val preferredSelector = if (useFrontCamera) {
                     CameraSelector.DEFAULT_FRONT_CAMERA
                 } else {
@@ -606,10 +1008,32 @@ private fun CameraPosePreview(
                     else -> null
                 } ?: return@addListener
 
-                val preview = Preview.Builder().build().also {
-                    it.surfaceProvider = previewView.surfaceProvider
-                }
+                activeFrontCamera.set(selector == CameraSelector.DEFAULT_FRONT_CAMERA)
+                poseAnalyzer.resetTracking()
+
+                val previewResSelector = ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                    .build()
+
+                val analysisResSelector = ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            Size(640, 480),
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                        )
+                    )
+                    .build()
+
+                val preview = Preview.Builder()
+                    .setResolutionSelector(previewResSelector)
+                    .build()
+                    .also {
+                        it.surfaceProvider = previewView.surfaceProvider
+                    }
+
                 val analysis = ImageAnalysis.Builder()
+                    .setResolutionSelector(analysisResSelector)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                     .also {
@@ -643,9 +1067,9 @@ private fun WorkoutMetricsAndControls(
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(20.dp),
+            modifier = Modifier.padding(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
                 text = "ระยะเวลาออกกำลังกาย",
@@ -674,7 +1098,7 @@ private fun WorkoutMetricsAndControls(
                 text = if (uiState.canSaveWorkout) {
                     "ผ่านเกณฑ์ขั้นต่ำ 15 นาทีแล้ว — สามารถจบและบันทึกกิจกรรมได้"
                 } else {
-                    "เหลืออีก ${DateStreakUtils.formatDurationClock(uiState.remainingToMinSeconds)} นาที เพื่อปลดล็อกการบันทึก (ขั้นต่ำ 15 นาที)"
+                    "เหลืออีก ${DateStreakUtils.formatDurationClock(uiState.remainingToMinSeconds)} นาที (เคลื่อนไหวจริงแล้ว ${DateStreakUtils.formatDurationClock(uiState.motionActiveSeconds)})"
                 },
                 style = MaterialTheme.typography.labelMedium,
                 color = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -683,7 +1107,7 @@ private fun WorkoutMetricsAndControls(
         }
     }
 
-    // Live Metrics Row
+    // Live Real Metrics Row
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -700,6 +1124,15 @@ private fun WorkoutMetricsAndControls(
                 icon = Icons.AutoMirrored.Rounded.DirectionsWalk,
                 label = "จำนวนก้าว",
                 value = "${uiState.steps}",
+                accentColor = EmeraldVibrant,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        if (uiState.sportType.supportsReps) {
+            MetricTile(
+                icon = Icons.Rounded.Repeat,
+                label = if (uiState.sportType.name == "JUMP_ROPE") "กระโดด" else "จำนวนครั้ง",
+                value = "${uiState.repsCount}",
                 accentColor = EmeraldVibrant,
                 modifier = Modifier.weight(1f)
             )

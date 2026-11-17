@@ -84,12 +84,12 @@ class DashboardViewModel(
         }
     }
 
-    fun updateDisplayName(name: String) {
+    fun updateProfile(name: String, weightKg: Float) {
         viewModelScope.launch {
-            repository.updateDisplayName(name)
-                .onSuccess { _actionMessage.value = "อัปเดตชื่อโปรไฟล์แล้ว" }
+            repository.updateProfile(name, weightKg)
+                .onSuccess { _actionMessage.value = "บันทึกข้อมูลโปรไฟล์แล้ว" }
                 .onFailure { err ->
-                    _actionMessage.value = "อัปเดตชื่อไม่สำเร็จ: ${err.localizedMessage ?: "ลองใหม่อีกครั้ง"}"
+                    _actionMessage.value = "อัปเดตโปรไฟล์ไม่สำเร็จ: ${err.localizedMessage ?: "ลองใหม่อีกครั้ง"}"
                 }
         }
     }

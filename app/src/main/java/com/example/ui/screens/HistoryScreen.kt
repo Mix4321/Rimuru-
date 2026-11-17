@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.Card
@@ -387,6 +388,15 @@ private fun WorkoutDetailSheet(
                     icon = Icons.AutoMirrored.Rounded.DirectionsWalk,
                     label = "จำนวนก้าว",
                     value = "${session.steps}",
+                    accentColor = EmeraldVibrant,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            if (session.sport.supportsReps || session.repsCount > 0) {
+                MetricTile(
+                    icon = Icons.Rounded.Repeat,
+                    label = if (session.sport == SportType.JUMP_ROPE) "กระโดด" else "จำนวนครั้ง",
+                    value = "${session.repsCount}",
                     accentColor = EmeraldVibrant,
                     modifier = Modifier.weight(1f)
                 )

@@ -1,5 +1,6 @@
 package com.example.ui.viewmodel
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.camera.PoseSkeletonSnapshot
@@ -12,6 +13,8 @@ import com.example.data.model.TrackingMode
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutSession
 import com.example.domain.DateStreakUtils
+import com.example.sensors.GpsTrackingSnapshot
+import com.example.sensors.SensorMotionSnapshot
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,28 +26,35 @@ import java.util.UUID
 import kotlin.math.roundToInt
 
 enum class ManualEffortLevel(val thaiLabel: String, val multiplier: Double) {
-    LIGHT("เบา", 0.8),
+    LIGHT("เบา", 0.78),
     MODERATE("ปานกลาง", 1.0),
-    INTENSE("เข้มข้น", 1.25)
+    INTENSE("เข้มข้น", 1.28)
 }
 
 data class WorkoutUiState(
     val sessionId: String = "",
     val sportType: SportType = SportType.RUNNING,
+    val userWeightKg: Float = 65f,
     val startedAtMillis: Long = 0L,
     val elapsedSeconds: Int = 0,
     val motionActiveSeconds: Int = 0,
     val steps: Int = 0,
     val distanceMeters: Int = 0,
+    val repsCount: Int = 0,
     val caloriesExact: Double = 0.0,
     val isRunning: Boolean = false,
     val hasStartedOnce: Boolean = false,
-    val trackingMode: TrackingMode = TrackingMode.CAMERA_AI,
+    val trackingMode: TrackingMode = TrackingMode.SENSOR_GPS,
     val cameraPermissionGranted: Boolean = false,
-    val cameraPermissionAsked: Boolean = false,
+    val locationPermissionGranted: Boolean = false,
+    val activityPermissionGranted: Boolean = false,
+    val permissionsEvaluated: Boolean = false,
     val useFrontCamera: Boolean = true,
     val poseSnapshot: PoseSkeletonSnapshot = PoseSkeletonSnapshot(),
+    val sensorSnapshot: SensorMotionSnapshot = SensorMotionSnapshot(),
+    val gpsSnapshot: GpsTrackingSnapshot = GpsTrackingSnapshot(),
     val isCurrentlyMoving: Boolean = false,
+    val currentIntensity: Float = 0f,
     val showAdjustCameraTip: Boolean = false,
     val manualEffort: ManualEffortLevel = ManualEffortLevel.MODERATE,
     val isSaving: Boolean = false,
@@ -52,7 +62,7 @@ data class WorkoutUiState(
     val savedSession: WorkoutSession? = null,
     val errorMessage: String? = null
 ) {
-    val caloriesBurned: Int get() = caloriesExact.roundToInt().coerceAtLeast(if (elapsedSeconds > 0) 1 else 0)
+    val caloriesBurned: Int get() = caloriesExact.roundToInt()
     val canSaveWorkout: Boolean get() = elapsedSeconds >= DateStreakUtils.MIN_WORKOUT_SECONDS
     val remainingToMinSeconds: Int get() = (DateStreakUtils.MIN_WORKOUT_SECONDS - elapsedSeconds).coerceAtLeast(0)
     val minRequirementProgress: Float
@@ -69,84 +79,98 @@ class WorkoutViewModel(
 
     private var timerJob: Job? = null
     private var lastMotionSeenMillis: Long = 0L
-    private var lastStepDeltaBuffer: Double = 0.0
-    private var lastDistDeltaBuffer: Double = 0.0
+    private var strideMetersFractionBuffer: Double = 0.0
     private var ticksSinceDraftSave: Int = 0
 
-    fun startFreshSession(sportType: SportType) {
+    fun startFreshSession(
+        sportType: SportType,
+        initialMode: TrackingMode = sportType.defaultTrackingMode
+    ) {
         timerJob?.cancel()
         val now = System.currentTimeMillis()
-        lastMotionSeenMillis = now
-        lastStepDeltaBuffer = 0.0
-        lastDistDeltaBuffer = 0.0
+        lastMotionSeenMillis = 0L
+        strideMetersFractionBuffer = 0.0
         _uiState.value = WorkoutUiState(
             sessionId = UUID.randomUUID().toString(),
             sportType = sportType,
             startedAtMillis = now,
             isRunning = false,
             hasStartedOnce = false,
-            trackingMode = TrackingMode.CAMERA_AI
+            trackingMode = initialMode
         )
+        loadProfileWeight()
     }
 
     fun restoreFromDraft(draft: ActiveWorkoutDraft) {
         timerJob?.cancel()
-        val now = System.currentTimeMillis()
-        lastMotionSeenMillis = now
-        lastStepDeltaBuffer = 0.0
-        lastDistDeltaBuffer = 0.0
-
-        val bonusSeconds = if (draft.isRunning) {
-            ((now - draft.lastSavedEpochMillis) / 1000L).toInt().coerceIn(0, 1800)
-        } else {
-            0
-        }
-
-        val sport = draft.sportType
-        val restoredElapsed = draft.elapsedSeconds + bonusSeconds
-        val extraCal = (sport.kcalPerMinute / 60.0) * bonusSeconds
-        val extraSteps = if (sport.supportsSteps) ((sport.stepsPerMinute / 60.0) * bonusSeconds).roundToInt() else 0
-        val extraDist = if (sport.supportsDistance) ((sport.metersPerMinute / 60.0) * bonusSeconds).roundToInt() else 0
+        lastMotionSeenMillis = 0L
+        strideMetersFractionBuffer = 0.0
 
         _uiState.value = WorkoutUiState(
             sessionId = draft.sessionId,
-            sportType = sport,
+            sportType = draft.sportType,
             startedAtMillis = draft.startedAtMillis,
-            elapsedSeconds = restoredElapsed,
+            elapsedSeconds = draft.elapsedSeconds,
             motionActiveSeconds = draft.motionActiveSeconds,
-            steps = draft.steps + extraSteps,
-            distanceMeters = draft.distanceMeters + extraDist,
-            caloriesExact = draft.caloriesExact + extraCal,
+            steps = draft.steps,
+            distanceMeters = draft.distanceMeters,
+            repsCount = draft.repsCount,
+            caloriesExact = draft.caloriesExact,
             isRunning = false,
             hasStartedOnce = true,
-            trackingMode = TrackingMode.CAMERA_AI
+            trackingMode = draft.trackingMode
         )
+        loadProfileWeight()
     }
 
-    fun onCameraPermissionResult(granted: Boolean) {
+    private fun loadProfileWeight() {
+        viewModelScope.launch {
+            runCatching { repository.getUserProfileOnce() }
+                .onSuccess { profile ->
+                    _uiState.update { it.copy(userWeightKg = profile.weightKg.coerceIn(25f, 250f)) }
+                }
+        }
+    }
+
+    fun updatePermissionStates(
+        cameraGranted: Boolean,
+        locationGranted: Boolean,
+        activityGranted: Boolean,
+        autoStartIfFirstTime: Boolean = false
+    ) {
         _uiState.update { state ->
+            val adjustedMode = if (state.trackingMode == TrackingMode.CAMERA_AI && !cameraGranted && autoStartIfFirstTime) {
+                if (state.sportType == SportType.GENERAL) TrackingMode.MANUAL else TrackingMode.SENSOR_GPS
+            } else {
+                state.trackingMode
+            }
             state.copy(
-                cameraPermissionGranted = granted,
-                cameraPermissionAsked = true,
-                trackingMode = if (granted) TrackingMode.CAMERA_AI else TrackingMode.MANUAL,
+                cameraPermissionGranted = cameraGranted,
+                locationPermissionGranted = locationGranted,
+                activityPermissionGranted = activityGranted,
+                permissionsEvaluated = true,
+                trackingMode = adjustedMode,
                 showAdjustCameraTip = false
             )
         }
-        if (!_uiState.value.hasStartedOnce) {
+        if (autoStartIfFirstTime && !_uiState.value.hasStartedOnce) {
             startOrResumeTimer()
         }
     }
 
     fun switchTrackingMode(mode: TrackingMode) {
         _uiState.update { state ->
-            val effectiveMode = if (mode == TrackingMode.CAMERA_AI && !state.cameraPermissionGranted) {
-                TrackingMode.MANUAL
-            } else {
-                mode
+            if (mode == TrackingMode.CAMERA_AI && !state.cameraPermissionGranted) {
+                return@update state.copy(
+                    errorMessage = "กรุณาอนุญาตสิทธิ์กล้องก่อนสลับเป็นโหมดกล้อง AI"
+                )
             }
             state.copy(
-                trackingMode = effectiveMode,
-                showAdjustCameraTip = false
+                trackingMode = mode,
+                showAdjustCameraTip = false,
+                isCurrentlyMoving = false,
+                currentIntensity = 0f,
+                errorMessage = null
             )
         }
     }
@@ -161,7 +185,6 @@ class WorkoutViewModel(
 
     fun startOrResumeTimer() {
         if (_uiState.value.isRunning) return
-        lastMotionSeenMillis = System.currentTimeMillis()
         _uiState.update {
             it.copy(
                 isRunning = true,
@@ -176,7 +199,14 @@ class WorkoutViewModel(
 
     fun pauseTimer() {
         timerJob?.cancel()
-        _uiState.update { it.copy(isRunning = false, showAdjustCameraTip = false) }
+        _uiState.update {
+            it.copy(
+                isRunning = false,
+                isCurrentlyMoving = false,
+                currentIntensity = 0f,
+                showAdjustCameraTip = false
+            )
+        }
         persistDraftAsync()
     }
 
@@ -186,70 +216,178 @@ class WorkoutViewModel(
             lastMotionSeenMillis = now
         }
         _uiState.update { state ->
-            val bonusStep = if (state.isRunning && state.trackingMode == TrackingMode.CAMERA_AI && state.sportType.supportsSteps && snapshot.stepImpulse) 1 else 0
+            val canAccumulate = state.isRunning && state.trackingMode == TrackingMode.CAMERA_AI
+            val addSteps = if (canAccumulate && state.sportType.supportsSteps) snapshot.stepDelta else 0
+            val addReps = if (canAccumulate && state.sportType.supportsReps) snapshot.repDelta else 0
+            val addMeters = if (canAccumulate && state.sportType.supportsDistance && addSteps > 0) {
+                accumulateMetersFromSteps(addSteps, state.sportType.strideMeters)
+            } else {
+                0
+            }
+
             state.copy(
                 poseSnapshot = snapshot,
-                isCurrentlyMoving = snapshot.isMoving,
-                steps = state.steps + bonusStep,
-                showAdjustCameraTip = if (snapshot.isMoving) false else state.showAdjustCameraTip
+                isCurrentlyMoving = if (state.trackingMode == TrackingMode.CAMERA_AI) snapshot.isMoving else state.isCurrentlyMoving,
+                currentIntensity = if (state.trackingMode == TrackingMode.CAMERA_AI) snapshot.motionIntensity else state.currentIntensity,
+                steps = state.steps + addSteps,
+                repsCount = state.repsCount + addReps,
+                distanceMeters = state.distanceMeters + addMeters,
+                showAdjustCameraTip = if (snapshot.isMoving && snapshot.isBodyVisible) false else state.showAdjustCameraTip
             )
         }
+    }
+
+    fun onSensorStepDetected(deltaSteps: Int) {
+        if (deltaSteps <= 0) return
+        val now = System.currentTimeMillis()
+        _uiState.update { state ->
+            if (!state.isRunning || state.trackingMode != TrackingMode.SENSOR_GPS) return@update state
+            lastMotionSeenMillis = now
+            val addSteps = if (state.sportType.supportsSteps) deltaSteps else 0
+            // When GPS doesn't have an accurate outdoor fix yet (e.g. treadmill / indoor), derive real distance from real hardware steps
+            val addMeters = if (state.sportType.supportsDistance && !state.gpsSnapshot.hasFix && deltaSteps > 0) {
+                accumulateMetersFromSteps(deltaSteps, state.sportType.strideMeters.coerceAtLeast(0.75))
+            } else {
+                0
+            }
+            state.copy(
+                steps = state.steps + addSteps,
+                distanceMeters = state.distanceMeters + addMeters,
+                isCurrentlyMoving = true
+            )
+        }
+    }
+
+    fun onSensorJumpRepDetected(deltaReps: Int) {
+        if (deltaReps <= 0) return
+        val now = System.currentTimeMillis()
+        _uiState.update { state ->
+            if (!state.isRunning || state.trackingMode != TrackingMode.SENSOR_GPS) return@update state
+            if (!state.sportType.supportsReps) return@update state
+            lastMotionSeenMillis = now
+            state.copy(
+                repsCount = state.repsCount + deltaReps,
+                isCurrentlyMoving = true
+            )
+        }
+    }
+
+    fun onSensorMotionStateChanged(snapshot: SensorMotionSnapshot) {
+        val now = System.currentTimeMillis()
+        _uiState.update { state ->
+            if (state.trackingMode == TrackingMode.SENSOR_GPS && state.isRunning && snapshot.isMoving) {
+                lastMotionSeenMillis = now
+            }
+            val effectiveMoving = if (state.trackingMode == TrackingMode.SENSOR_GPS) {
+                snapshot.isMoving || state.gpsSnapshot.currentSpeedKmh >= 1.2f || (now - lastMotionSeenMillis) <= 2200L
+            } else {
+                state.isCurrentlyMoving
+            }
+            state.copy(
+                sensorSnapshot = snapshot,
+                isCurrentlyMoving = effectiveMoving,
+                currentIntensity = if (state.trackingMode == TrackingMode.SENSOR_GPS) snapshot.motionIntensity else state.currentIntensity
+            )
+        }
+    }
+
+    fun onGpsDistanceAdded(deltaMeters: Int) {
+        if (deltaMeters <= 0) return
+        val now = System.currentTimeMillis()
+        _uiState.update { state ->
+            if (!state.isRunning || state.trackingMode != TrackingMode.SENSOR_GPS || !state.sportType.supportsDistance) {
+                return@update state
+            }
+            lastMotionSeenMillis = now
+            state.copy(
+                distanceMeters = state.distanceMeters + deltaMeters,
+                isCurrentlyMoving = true
+            )
+        }
+    }
+
+    fun onGpsStateChanged(snapshot: GpsTrackingSnapshot) {
+        val now = System.currentTimeMillis()
+        _uiState.update { state ->
+            if (state.trackingMode == TrackingMode.SENSOR_GPS && state.isRunning && snapshot.currentSpeedKmh >= 1.2f) {
+                lastMotionSeenMillis = now
+            }
+            state.copy(gpsSnapshot = snapshot)
+        }
+    }
+
+    private fun accumulateMetersFromSteps(steps: Int, strideMeters: Double): Int {
+        if (steps <= 0 || strideMeters <= 0.0) return 0
+        strideMetersFractionBuffer += steps * strideMeters
+        val whole = strideMetersFractionBuffer.toInt()
+        if (whole >= 1) {
+            strideMetersFractionBuffer -= whole
+        }
+        return whole
     }
 
     private fun startTickerLoop() {
         timerJob?.cancel()
         timerJob = viewModelScope.launch {
+            var lastElapsedReal = SystemClock.elapsedRealtime()
+            var msCarry = 0L
+
             while (true) {
-                delay(1000L)
+                delay(500L)
                 val current = _uiState.value
                 if (!current.isRunning) break
 
-                val now = System.currentTimeMillis()
+                val nowReal = SystemClock.elapsedRealtime()
+                msCarry += (nowReal - lastElapsedReal).coerceIn(0L, 5000L)
+                lastElapsedReal = nowReal
+
+                val wholeSeconds = (msCarry / 1000L).toInt()
+                if (wholeSeconds <= 0) continue
+                msCarry %= 1000L
+
+                val nowWall = System.currentTimeMillis()
                 val sport = current.sportType
-                val isCameraMode = current.trackingMode == TrackingMode.CAMERA_AI
-                val recentlyMoved = !isCameraMode || (now - lastMotionSeenMillis) <= 2800L
-                val idleMillis = now - lastMotionSeenMillis
-                val shouldShowTip = isCameraMode && idleMillis >= 4000L
-
-                val intensityFactor = when {
-                    !isCameraMode -> current.manualEffort.multiplier
-                    recentlyMoved -> (0.85 + current.poseSnapshot.motionIntensity * 0.45).coerceIn(0.85, 1.35)
-                    else -> 0.0
+                val mode = current.trackingMode
+                val isMovingRecently = when (mode) {
+                    TrackingMode.CAMERA_AI -> current.poseSnapshot.isBodyVisible &&
+                        (current.poseSnapshot.isMoving || (nowWall - lastMotionSeenMillis) <= 2200L)
+                    TrackingMode.SENSOR_GPS -> current.sensorSnapshot.isMoving ||
+                        current.gpsSnapshot.currentSpeedKmh >= 1.2f ||
+                        (nowWall - lastMotionSeenMillis) <= 2200L
+                    TrackingMode.MANUAL -> true
                 }
 
-                val calDelta = if (intensityFactor > 0.0) (sport.kcalPerMinute / 60.0) * intensityFactor else 0.0
-                var addedSteps = 0
-                if (sport.supportsSteps && intensityFactor > 0.0) {
-                    lastStepDeltaBuffer += (sport.stepsPerMinute / 60.0) * intensityFactor
-                    if (lastStepDeltaBuffer >= 1.0) {
-                        val whole = lastStepDeltaBuffer.toInt()
-                        addedSteps = whole
-                        lastStepDeltaBuffer -= whole
+                val idleMillis = if (lastMotionSeenMillis > 0L) nowWall - lastMotionSeenMillis else current.elapsedSeconds * 1000L
+                val shouldShowCameraTip = mode == TrackingMode.CAMERA_AI &&
+                    (!current.poseSnapshot.isBodyVisible || idleMillis >= 4000L)
+
+                // Scientific MET calorie formula: kcal/min = MET * weight(kg) * 3.5 / 200
+                val baseKcalPerSec = (sport.metValue * current.userWeightKg * 3.5 / 200.0) / 60.0
+                val intensityMultiplier = when (mode) {
+                    TrackingMode.CAMERA_AI -> {
+                        if (isMovingRecently) (0.75 + current.poseSnapshot.motionIntensity * 0.55).coerceIn(0.75, 1.35)
+                        else 0.0
                     }
-                }
-                var addedMeters = 0
-                if (sport.supportsDistance && intensityFactor > 0.0) {
-                    lastDistDeltaBuffer += (sport.metersPerMinute / 60.0) * intensityFactor
-                    if (lastDistDeltaBuffer >= 1.0) {
-                        val whole = lastDistDeltaBuffer.toInt()
-                        addedMeters = whole
-                        lastDistDeltaBuffer -= whole
+                    TrackingMode.SENSOR_GPS -> {
+                        if (isMovingRecently) (0.78 + current.sensorSnapshot.motionIntensity * 0.55).coerceIn(0.78, 1.38)
+                        else 0.0
                     }
+                    TrackingMode.MANUAL -> current.manualEffort.multiplier
                 }
+
+                val calDelta = baseKcalPerSec * intensityMultiplier * wholeSeconds
 
                 _uiState.update { s ->
                     s.copy(
-                        elapsedSeconds = s.elapsedSeconds + 1,
-                        motionActiveSeconds = s.motionActiveSeconds + if (recentlyMoved) 1 else 0,
+                        elapsedSeconds = s.elapsedSeconds + wholeSeconds,
+                        motionActiveSeconds = s.motionActiveSeconds + if (isMovingRecently) wholeSeconds else 0,
                         caloriesExact = s.caloriesExact + calDelta,
-                        steps = s.steps + addedSteps,
-                        distanceMeters = s.distanceMeters + addedMeters,
-                        isCurrentlyMoving = recentlyMoved,
-                        showAdjustCameraTip = shouldShowTip
+                        isCurrentlyMoving = isMovingRecently,
+                        showAdjustCameraTip = shouldShowCameraTip
                     )
                 }
 
-                ticksSinceDraftSave++
+                ticksSinceDraftSave += wholeSeconds
                 if (ticksSinceDraftSave >= 3) {
                     ticksSinceDraftSave = 0
                     persistDraftNow(_uiState.value)
@@ -281,6 +419,7 @@ class WorkoutViewModel(
             caloriesBurned = state.caloriesBurned.coerceAtLeast(1),
             steps = state.steps,
             distanceMeters = state.distanceMeters,
+            repsCount = state.repsCount,
             trackingMode = state.trackingMode.name,
             motionActiveSeconds = state.motionActiveSeconds,
             activityDate = DateStreakUtils.dateStringFromMillis(startMillis),
@@ -338,11 +477,13 @@ class WorkoutViewModel(
             draft = ActiveWorkoutDraft(
                 sessionId = state.sessionId,
                 sportType = state.sportType,
+                trackingMode = state.trackingMode,
                 startedAtMillis = state.startedAtMillis,
                 elapsedSeconds = state.elapsedSeconds,
                 motionActiveSeconds = state.motionActiveSeconds,
                 steps = state.steps,
                 distanceMeters = state.distanceMeters,
+                repsCount = state.repsCount,
                 caloriesExact = state.caloriesExact,
                 isRunning = state.isRunning,
                 lastSavedEpochMillis = System.currentTimeMillis()

@@ -15,91 +15,109 @@ enum class SportType(
     val thaiName: String,
     val subtitle: String,
     val icon: ImageVector,
+    val metValue: Double,
     val kcalPerMinute: Double,
     val supportsSteps: Boolean,
     val supportsDistance: Boolean,
-    val stepsPerMinute: Double,
-    val metersPerMinute: Double
+    val supportsReps: Boolean,
+    val strideMeters: Double,
+    val defaultTrackingMode: TrackingMode
 ) {
     RUNNING(
         thaiName = "วิ่ง",
-        subtitle = "จับระยะทาง ก้าว และเผาผลาญสูง",
+        subtitle = "จับก้าว ระยะทาง GPS และความเร็ว",
         icon = Icons.AutoMirrored.Rounded.DirectionsRun,
+        metValue = 9.8,
         kcalPerMinute = 9.8,
         supportsSteps = true,
         supportsDistance = true,
-        stepsPerMinute = 155.0,
-        metersPerMinute = 145.0
+        supportsReps = false,
+        strideMeters = 0.95,
+        defaultTrackingMode = TrackingMode.SENSOR_GPS
     ),
     WALKING(
         thaiName = "เดิน",
-        subtitle = "เดินเพื่อสุขภาพ นับก้าวและระยะทาง",
+        subtitle = "เดินเพื่อสุขภาพ นับก้าวและระยะทางจริง",
         icon = Icons.AutoMirrored.Rounded.DirectionsWalk,
+        metValue = 3.8,
         kcalPerMinute = 4.2,
         supportsSteps = true,
         supportsDistance = true,
-        stepsPerMinute = 108.0,
-        metersPerMinute = 80.0
+        supportsReps = false,
+        strideMeters = 0.72,
+        defaultTrackingMode = TrackingMode.SENSOR_GPS
     ),
     JUMP_ROPE(
         thaiName = "กระโดดเชือก",
-        subtitle = "คาร์ดิโอความเข้มข้นสูง นับจังหวะ",
+        subtitle = "จับจังหวะกระโดดด้วย AI และเซนเซอร์",
         icon = Icons.Rounded.SportsHandball,
+        metValue = 11.0,
         kcalPerMinute = 11.5,
-        supportsSteps = true,
+        supportsSteps = false,
         supportsDistance = false,
-        stepsPerMinute = 120.0,
-        metersPerMinute = 0.0
+        supportsReps = true,
+        strideMeters = 0.0,
+        defaultTrackingMode = TrackingMode.CAMERA_AI
     ),
     FOOTBALL(
         thaiName = "ฟุตบอล",
-        subtitle = "เคลื่อนที่เร็ว นับก้าวและระยะทางสนาม",
+        subtitle = "จับก้าว ระยะทางสนาม และการวิ่ง",
         icon = Icons.Rounded.SportsSoccer,
+        metValue = 8.0,
         kcalPerMinute = 8.8,
         supportsSteps = true,
         supportsDistance = true,
-        stepsPerMinute = 128.0,
-        metersPerMinute = 110.0
+        supportsReps = false,
+        strideMeters = 0.85,
+        defaultTrackingMode = TrackingMode.SENSOR_GPS
     ),
     BASKETBALL(
         thaiName = "บาสเกตบอล",
-        subtitle = "สปรินต์และกระโดด เผาผลาญต่อเนื่อง",
+        subtitle = "จับก้าว การกระโดด และความเข้มข้น",
         icon = Icons.Rounded.SportsBasketball,
+        metValue = 7.5,
         kcalPerMinute = 8.2,
         supportsSteps = true,
         supportsDistance = true,
-        stepsPerMinute = 118.0,
-        metersPerMinute = 95.0
+        supportsReps = false,
+        strideMeters = 0.85,
+        defaultTrackingMode = TrackingMode.SENSOR_GPS
     ),
     BADMINTON(
         thaiName = "แบดมินตัน",
-        subtitle = "ฟุตเวิร์กและการเคลื่อนไหวรอบคอร์ท",
+        subtitle = "จับฟุตเวิร์กและการเคลื่อนไหวคอร์ท",
         icon = Icons.Rounded.SportsTennis,
+        metValue = 6.5,
         kcalPerMinute = 6.8,
         supportsSteps = true,
         supportsDistance = false,
-        stepsPerMinute = 105.0,
-        metersPerMinute = 0.0
+        supportsReps = true,
+        strideMeters = 0.75,
+        defaultTrackingMode = TrackingMode.CAMERA_AI
     ),
     CYCLING(
         thaiName = "ปั่นจักรยาน",
-        subtitle = "จับระยะทางปั่นและแคลอรีต่อเนื่อง",
+        subtitle = "จับระยะทาง GPS และความเร็วปั่น",
         icon = Icons.AutoMirrored.Rounded.DirectionsBike,
+        metValue = 7.5,
         kcalPerMinute = 7.8,
         supportsSteps = false,
         supportsDistance = true,
-        stepsPerMinute = 0.0,
-        metersPerMinute = 320.0
+        supportsReps = false,
+        strideMeters = 0.0,
+        defaultTrackingMode = TrackingMode.SENSOR_GPS
     ),
     GENERAL(
         thaiName = "ออกกำลังกายทั่วไป",
-        subtitle = "เวทเทรนนิ่ง ยืดเหยียด หรือบอดี้เวท",
+        subtitle = "นับครั้งสควอท/วิดพื้น/บอดี้เวทด้วยกล้อง AI",
         icon = Icons.Rounded.FitnessCenter,
+        metValue = 5.5,
         kcalPerMinute = 6.0,
         supportsSteps = false,
         supportsDistance = false,
-        stepsPerMinute = 0.0,
-        metersPerMinute = 0.0
+        supportsReps = true,
+        strideMeters = 0.0,
+        defaultTrackingMode = TrackingMode.CAMERA_AI
     );
 
     companion object {

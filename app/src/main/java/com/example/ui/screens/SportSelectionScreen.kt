@@ -23,12 +23,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -47,11 +51,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.SportType
+import com.example.data.model.TrackingMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SportSelectionScreen(
-    onBeginWorkout: (SportType) -> Unit,
+    onBeginWorkout: (SportType, TrackingMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var readySport by remember { mutableStateOf<SportType?>(null) }
@@ -66,9 +71,9 @@ fun SportSelectionScreen(
         ) {
             SportReadySheetContent(
                 sport = sport,
-                onStartClicked = {
+                onStartClicked = { selectedMode ->
                     readySport = null
-                    onBeginWorkout(sport)
+                    onBeginWorkout(sport, selectedMode)
                 }
             )
         }
@@ -193,8 +198,10 @@ private fun SportGridCard(
 @Composable
 private fun SportReadySheetContent(
     sport: SportType,
-    onStartClicked: () -> Unit
+    onStartClicked: (TrackingMode) -> Unit
 ) {
+    var selectedMode by remember(sport) { mutableStateOf(sport.defaultTrackingMode) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -233,6 +240,44 @@ private fun SportReadySheetContent(
             }
         }
 
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "เลือกรูปแบบการตรวจจับจริง",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TrackingMode.entries.forEach { mode ->
+                    val selected = selectedMode == mode
+                    FilterChip(
+                        selected = selected,
+                        onClick = { selectedMode = mode },
+                        label = { Text(mode.shortLabel) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = when (mode) {
+                                    TrackingMode.CAMERA_AI -> Icons.Rounded.CameraAlt
+                                    TrackingMode.SENSOR_GPS -> Icons.Rounded.Sensors
+                                    TrackingMode.MANUAL -> Icons.Rounded.EditNote
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
         Surface(
             shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -246,9 +291,21 @@ private fun SportReadySheetContent(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(Icons.Rounded.CameraAlt, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Icon(
+                        imageVector = when (selectedMode) {
+                            TrackingMode.CAMERA_AI -> Icons.Rounded.CameraAlt
+                            TrackingMode.SENSOR_GPS -> Icons.Rounded.Sensors
+                            TrackingMode.MANUAL -> Icons.Rounded.EditNote
+                        },
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
                     Text(
-                        text = "ระบบจะขอสิทธิ์กล้องเพื่อตรวจจับท่าทางด้วย AI (หากปฏิเสธสามารถใช้โหมดบันทึกด้วยตนเองได้ทันที)",
+                        text = when (selectedMode) {
+                            TrackingMode.CAMERA_AI -> "ตั้งมือถือให้เห็นร่างกาย AI จะจับโครงกระดูก นับครั้ง/ก้าว และเผาผลาญเมื่อเคลื่อนไหวจริงเท่านั้น"
+                            TrackingMode.SENSOR_GPS -> "พกมือถือติดตัว ระบบใช้ตัวนับก้าวฮาร์ดแวร์ วัดความเร่ง และ GPS วัดระยะทางจริง"
+                            TrackingMode.MANUAL -> "จับเวลาและประเมินแคลอรีตามระดับความหนักที่เลือก (สำหรับกิจกรรมที่ไม่พกมือถือ)"
+                        },
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
@@ -267,9 +324,10 @@ private fun SportReadySheetContent(
         }
 
         val trackedList = buildList {
-            add("ระยะเวลา & แคลอรี (~${sport.kcalPerMinute} kcal/นาที)")
-            if (sport.supportsSteps) add("จำนวนก้าว / จังหวะ")
-            if (sport.supportsDistance) add("ระยะทางโดยประมาณ")
+            add("ระยะเวลา & แคลอรี (MET)")
+            if (sport.supportsSteps) add("จำนวนก้าวจริง")
+            if (sport.supportsReps) add("จำนวนครั้ง/กระโดด")
+            if (sport.supportsDistance) add("ระยะทาง GPS / ก้าว")
         }
 
         Text(
@@ -279,7 +337,7 @@ private fun SportReadySheetContent(
         )
 
         Button(
-            onClick = onStartClicked,
+            onClick = { onStartClicked(selectedMode) },
             shape = RoundedCornerShape(18.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -289,7 +347,7 @@ private fun SportReadySheetContent(
             Icon(Icons.Rounded.PlayArrow, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "เริ่มจับเวลาและตรวจจับการเคลื่อนไหว",
+                text = "เริ่มจับเวลาและตรวจจับจริง",
                 style = MaterialTheme.typography.titleMedium
             )
         }
