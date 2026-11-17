@@ -1,0 +1,6 @@
+{
+  "name": "MOVE",
+  "description": "แอปติดตามการออกกำลังกายและกิจกรรมกีฬาอัจฉริยะ พร้อมระบบตรวจจับการเคลื่อนไหว เป้าหมายรายวัน และระบบ Streak",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

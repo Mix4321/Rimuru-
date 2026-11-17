@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">MOVE</string>
+    <string name="app_tagline">Smart Sports &amp; Activity Tracker</string>
+    <string name="sign_in_google">เข้าสู่ระบบด้วย Google</string>
+    <string name="welcome_hero_desc">ภาพประกอบการเคลื่อนไหวของแอป MOVE</string>
+    <string name="goal_badge_desc">เหรียญความสำเร็จเป้าหมายรายวัน</string>
+    <string name="nav_dashboard">หน้าหลัก</string>
+    <string name="nav_sports">เลือกกีฬา</string>
+    <string name="nav_history">ประวัติ</string>
+    <string name="error_sign_in_cancelled">ยกเลิกการเข้าสู่ระบบ กรุณาเลือกบัญชีเพื่อดำเนินการต่อ</string>
+</resources>
