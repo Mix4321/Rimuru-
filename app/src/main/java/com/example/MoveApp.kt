@@ -67,6 +67,7 @@ import com.example.data.model.UiState
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.SportSelectionScreen
+import com.example.ui.screens.StretchingScreen
 import com.example.ui.screens.WorkoutScreen
 import com.example.ui.viewmodel.DashboardData
 import com.example.ui.viewmodel.DashboardViewModel
@@ -81,6 +82,12 @@ data object SportsRoute
 
 @Serializable
 data object HistoryRoute
+
+@Serializable
+data class StretchingRoute(
+    val sportName: String,
+    val trackingModeName: String = ""
+)
 
 @Serializable
 data class WorkoutRoute(
@@ -149,7 +156,8 @@ fun AppNavigation() {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDest = navBackStackEntry?.destination
-    val isWorkoutScreen = currentDest?.hasRoute<WorkoutRoute>() == true
+    val isWorkoutScreen = currentDest?.hasRoute<WorkoutRoute>() == true ||
+        currentDest?.hasRoute<StretchingRoute>() == true
 
     fun navigateTopLevel(tab: TopLevelTab) {
         navController.navigate(tab.routeObj) {
@@ -276,10 +284,9 @@ fun AppNavigation() {
                                     onStartExerciseClick = { navigateTopLevel(TopLevelTab.SPORTS) },
                                     onQuickStartSport = { sport ->
                                         navController.navigate(
-                                            WorkoutRoute(
+                                            StretchingRoute(
                                                 sportName = sport.name,
-                                                trackingModeName = sport.defaultTrackingMode.name,
-                                                resumeDraft = false
+                                                trackingModeName = sport.defaultTrackingMode.name
                                             )
                                         )
                                     },
@@ -302,6 +309,14 @@ fun AppNavigation() {
 
                         composable<SportsRoute> {
                             SportSelectionScreen(
+                                onStartStretching = { sport, mode ->
+                                    navController.navigate(
+                                        StretchingRoute(
+                                            sportName = sport.name,
+                                            trackingModeName = mode.name
+                                        )
+                                    )
+                                },
                                 onBeginWorkout = { sport, mode ->
                                     navController.navigate(
                                         WorkoutRoute(
@@ -310,6 +325,26 @@ fun AppNavigation() {
                                             resumeDraft = false
                                         )
                                     )
+                                }
+                            )
+                        }
+
+                        composable<StretchingRoute> { backStackEntry ->
+                            val routeArgs = backStackEntry.toRoute<StretchingRoute>()
+                            val sport = SportType.fromNameSafe(routeArgs.sportName)
+                            StretchingScreen(
+                                sportType = sport,
+                                onBack = { navController.popBackStack() },
+                                onStartWorkoutNow = {
+                                    navController.navigate(
+                                        WorkoutRoute(
+                                            sportName = sport.name,
+                                            trackingModeName = routeArgs.trackingModeName,
+                                            resumeDraft = false
+                                        )
+                                    ) {
+                                        popUpTo<StretchingRoute> { inclusive = true }
+                                    }
                                 }
                             )
                         }

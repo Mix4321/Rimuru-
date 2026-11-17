@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccessibilityNew
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.EditNote
@@ -36,6 +37,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -51,11 +53,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.SportType
+import com.example.data.model.StretchingCatalog
 import com.example.data.model.TrackingMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SportSelectionScreen(
+    onStartStretching: (SportType, TrackingMode) -> Unit,
     onBeginWorkout: (SportType, TrackingMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -71,6 +75,10 @@ fun SportSelectionScreen(
         ) {
             SportReadySheetContent(
                 sport = sport,
+                onStretchClicked = { selectedMode ->
+                    readySport = null
+                    onStartStretching(sport, selectedMode)
+                },
                 onStartClicked = { selectedMode ->
                     readySport = null
                     onBeginWorkout(sport, selectedMode)
@@ -198,9 +206,12 @@ private fun SportGridCard(
 @Composable
 private fun SportReadySheetContent(
     sport: SportType,
+    onStretchClicked: (TrackingMode) -> Unit,
     onStartClicked: (TrackingMode) -> Unit
 ) {
     var selectedMode by remember(sport) { mutableStateOf(sport.defaultTrackingMode) }
+    val stretchCount = remember(sport) { StretchingCatalog.exercisesFor(sport).size }
+    val stretchFocus = remember(sport) { StretchingCatalog.summaryFocusFor(sport) }
 
     Column(
         modifier = Modifier
@@ -336,21 +347,70 @@ private fun SportReadySheetContent(
             color = MaterialTheme.colorScheme.primary
         )
 
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AccessibilityNew,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "ยืดกล้ามเนื้อเฉพาะทาง ($stretchCount ท่า • ปรับเวลาได้)",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        text = stretchFocus,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                    )
+                }
+            }
+        }
+
         Button(
+            onClick = { onStretchClicked(selectedMode) },
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp)
+                .testTag("start_stretching_button")
+        ) {
+            Icon(Icons.Rounded.AccessibilityNew, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "ยืดกล้ามเนื้อก่อนเริ่ม (แนะนำ)",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        OutlinedButton(
             onClick = { onStartClicked(selectedMode) },
             shape = RoundedCornerShape(18.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(56.dp)
+                .height(50.dp)
                 .testTag("confirm_start_workout_button")
         ) {
             Icon(Icons.Rounded.PlayArrow, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "เริ่มจับเวลาและตรวจจับจริง",
-                style = MaterialTheme.typography.titleMedium
+                text = "ข้ามไปเริ่มออกกำลังกายเลย",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
             )
         }
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
     }
 }
