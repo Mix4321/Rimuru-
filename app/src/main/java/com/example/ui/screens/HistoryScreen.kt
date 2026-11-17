@@ -18,16 +18,24 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Balance
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -54,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -61,8 +70,11 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.SportType
 import com.example.data.model.WorkoutSession
 import com.example.domain.DateStreakUtils
+import com.example.share.WorkoutShareHelper
 import com.example.ui.components.ActivityBarChart
 import com.example.ui.components.MetricTile
+import com.example.ui.components.RouteJsonCodec
+import com.example.ui.components.RouteMapCard
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.EmeraldVibrant
@@ -70,6 +82,7 @@ import com.example.ui.theme.ForestGreen
 import com.example.ui.theme.ForestGreenDeep
 import com.example.ui.theme.MintBright
 import com.example.ui.viewmodel.DashboardData
+import com.example.widget.MoveWidgetProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,6 +91,7 @@ fun HistoryScreen(
     onDeleteWorkout: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var selectedChartTab by remember { mutableIntStateOf(0) } // 0 = รายวัน, 1 = รายสัปดาห์
     var selectedSportFilter by remember { mutableStateOf<SportType?>(null) }
     var inspectedSession by remember { mutableStateOf<WorkoutSession?>(null) }
@@ -97,9 +111,14 @@ fun HistoryScreen(
         ) {
             WorkoutDetailSheet(
                 session = session,
+                streakDays = data.streak.currentStreak,
+                onShare = {
+                    WorkoutShareHelper.shareWorkoutCard(context, session, data.streak.currentStreak)
+                },
                 onDelete = {
                     inspectedSession = null
                     onDeleteWorkout(session.id)
+                    MoveWidgetProvider.refreshAllWidgets(context)
                 }
             )
         }
@@ -127,12 +146,41 @@ fun HistoryScreen(
                         .padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        text = "ประวัติและสถิติกิจกรรม",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "ประวัติและสถิติกิจกรรม",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = Color.White.copy(alpha = 0.14f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.EmojiEvents,
+                                    contentDescription = null,
+                                    tint = AmberWarm,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "Lv.${data.progression.level} • ${data.progression.unlockedCount}/${data.progression.badges.size}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MintBright,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -273,7 +321,7 @@ fun HistoryScreen(
                             textAlign = TextAlign.Center
                         )
                         Text(
-                            text = "เริ่มต้นออกกำลังกายอย่างน้อย 15 นาที เพื่อบันทึกสถิติแรกของคุณ",
+                            text = "เริ่มต้นออกกำลังกายครั้งแรกแบบเวลาอิสระ เพื่อบันทึกสถิติแรกของคุณ",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
@@ -342,16 +390,46 @@ private fun WorkoutHistoryRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow
-                ) {
-                    Text(
-                        text = session.mode.thaiLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow
+                    ) {
+                        Text(
+                            text = session.mode.thaiLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    if (session.workoutSubType.equals("HIIT", ignoreCase = true)) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = EmeraldVibrant.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                text = "HIIT",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ForestGreen,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                    if (session.avgFormScore > 0) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = AmberWarm.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                text = "ฟอร์ม ${session.avgFormScore}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AmberWarm,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -375,11 +453,15 @@ private fun WorkoutHistoryRow(
 @Composable
 private fun WorkoutDetailSheet(
     session: WorkoutSession,
+    streakDays: Int,
+    onShare: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val routePoints = remember(session.routeJson) { RouteJsonCodec.decode(session.routeJson) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -407,7 +489,9 @@ private fun WorkoutDetailSheet(
                     style = MaterialTheme.typography.headlineMedium
                 )
                 Text(
-                    text = DateStreakUtils.formatDateTimeThai(session.startedAtMillis),
+                    text = "${DateStreakUtils.formatDateTimeThai(session.startedAtMillis)} • ${
+                        if (session.workoutSubType.equals("HIIT", ignoreCase = true)) "โหมด HIIT" else "เวลาอิสระ"
+                    }",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -467,6 +551,37 @@ private fun WorkoutDetailSheet(
             }
         }
 
+        if (session.avgFormScore > 0) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                MetricTile(
+                    icon = Icons.Rounded.AutoAwesome,
+                    label = "AI ฟอร์มเฉลี่ย",
+                    value = "${session.avgFormScore}%",
+                    accentColor = EmeraldVibrant,
+                    modifier = Modifier.weight(1f)
+                )
+                MetricTile(
+                    icon = Icons.Rounded.Balance,
+                    label = "สมดุลซ้าย-ขวา",
+                    value = "${session.avgSymmetryPercent}%",
+                    accentColor = ForestGreen,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        if (routePoints.size >= 2) {
+            RouteMapCard(
+                routePoints = routePoints,
+                distanceMeters = session.distanceMeters,
+                durationSeconds = session.durationSeconds,
+                mapHeight = 160.dp
+            )
+        }
+
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -484,11 +599,25 @@ private fun WorkoutDetailSheet(
                 Text(
                     text = "เวลาที่ตรวจจับการเคลื่อนไหวต่อเนื่อง: ${
                         DateStreakUtils.formatMinutesThai(session.motionActiveSeconds)
-                    }",
+                    }${if (streakDays > 0) " • Streak ปัจจุบัน $streakDays วัน" else ""}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+
+        Button(
+            onClick = onShare,
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = ForestGreen),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp)
+                .testTag("history_share_workout_button")
+        ) {
+            Icon(Icons.Rounded.Share, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("แชร์การ์ดสรุปผล (PNG)", fontWeight = FontWeight.Bold)
         }
 
         OutlinedButton(

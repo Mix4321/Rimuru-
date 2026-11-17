@@ -50,7 +50,7 @@ interface MoveDao {
 
 @Database(
     entities = [UserProfile::class, WorkoutSession::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class MoveRoomDatabase : RoomDatabase() {
@@ -60,10 +60,19 @@ abstract class MoveRoomDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: MoveRoomDatabase? = null
 
-        private val MIGRATION_1_2 = object : Migration(1, 2) {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE user_profile ADD COLUMN weightKg REAL NOT NULL DEFAULT 65.0")
                 db.execSQL("ALTER TABLE workouts ADD COLUMN repsCount INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE workouts ADD COLUMN avgFormScore INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE workouts ADD COLUMN avgSymmetryPercent INTEGER NOT NULL DEFAULT 100")
+                db.execSQL("ALTER TABLE workouts ADD COLUMN routeJson TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE workouts ADD COLUMN workoutSubType TEXT NOT NULL DEFAULT 'FREE'")
             }
         }
 
@@ -74,7 +83,7 @@ abstract class MoveRoomDatabase : RoomDatabase() {
                     MoveRoomDatabase::class.java,
                     "move_activity_db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }
@@ -112,7 +121,7 @@ class MoveRepository(private val dao: MoveDao) {
     }
 
     suspend fun updateDailyGoal(goalMinutes: Int): Result<Unit> = runCatching {
-        val clamped = goalMinutes.coerceIn(5, 300)
+        val clamped = goalMinutes.coerceIn(0, 300)
         val current = dao.getUserProfileOnce() ?: UserProfile()
         dao.upsertUserProfile(
             current.copy(
@@ -127,7 +136,7 @@ class MoveRepository(private val dao: MoveDao) {
         session: WorkoutSession
     ): Result<SaveWorkoutOutcome> = runCatching {
         require(session.durationSeconds >= DateStreakUtils.MIN_WORKOUT_SECONDS) {
-            "ต้องออกกำลังกายอย่างน้อย 15 นาที (900 วินาที) จึงจะบันทึกได้"
+            "กรุณาออกกำลังกายอย่างน้อย ${DateStreakUtils.MIN_WORKOUT_SECONDS} วินาที จึงจะบันทึกได้"
         }
 
         if (dao.getUserProfileOnce() == null) {
@@ -151,6 +160,59 @@ class MoveRepository(private val dao: MoveDao) {
             rowId == -1L
         }
 
+        val streakStatus = recalculateAndPersistStreak()
+        SaveWorkoutOutcome(
+            alreadyExisted = alreadyExisted,
+            updatedStreak = streakStatus
+        )
+    }
+
+    suspend fun deleteWorkout(workoutId: String): Result<Unit> = runCatching {
+        dao.deleteWorkoutById(workoutId)
+        recalculateAndPersistStreak()
+    }
+
+    suspend fun importWorkoutsFromBackup(
+        sessions: List<WorkoutSession>,
+        importedProfile: UserProfile?
+    ): Result<Int> = runCatching {
+        if (importedProfile != null) {
+            val existingProfile = dao.getUserProfileOnce()
+            if (existingProfile == null) {
+                dao.upsertUserProfile(importedProfile.copy(id = UserProfile.LOCAL_PROFILE_ID, userId = UserProfile.LOCAL_PROFILE_ID))
+            } else {
+                dao.upsertUserProfile(
+                    existingProfile.copy(
+                        displayName = importedProfile.displayName.ifBlank { existingProfile.displayName },
+                        weightKg = importedProfile.weightKg.coerceIn(25f, 250f),
+                        dailyGoalMinutes = importedProfile.dailyGoalMinutes.coerceIn(0, 300),
+                        updatedAtMillis = System.currentTimeMillis()
+                    )
+                )
+            }
+        } else if (dao.getUserProfileOnce() == null) {
+            dao.upsertUserProfile(UserProfile())
+        }
+
+        var inserted = 0
+        for (raw in sessions) {
+            if (raw.id.isBlank() || raw.durationSeconds < DateStreakUtils.MIN_WORKOUT_SECONDS) continue
+            val safeDate = raw.activityDate.ifBlank {
+                if (raw.startedAtMillis > 0L) DateStreakUtils.dateStringFromMillis(raw.startedAtMillis) else DateStreakUtils.todayDateString()
+            }
+            val rowId = dao.insertWorkoutIgnoreDuplicate(
+                raw.copy(
+                    userId = UserProfile.LOCAL_PROFILE_ID,
+                    activityDate = safeDate
+                )
+            )
+            if (rowId != -1L) inserted++
+        }
+        recalculateAndPersistStreak()
+        inserted
+    }
+
+    private suspend fun recalculateAndPersistStreak(): StreakStatus {
         val allWorkouts = dao.getAllWorkoutsOnce()
         val currentProfile = dao.getUserProfileOnce() ?: UserProfile()
         val streakStatus = DateStreakUtils.calculateStreak(
@@ -165,28 +227,6 @@ class MoveRepository(private val dao: MoveDao) {
                 updatedAtMillis = System.currentTimeMillis()
             )
         )
-
-        SaveWorkoutOutcome(
-            alreadyExisted = alreadyExisted,
-            updatedStreak = streakStatus
-        )
-    }
-
-    suspend fun deleteWorkout(workoutId: String): Result<Unit> = runCatching {
-        dao.deleteWorkoutById(workoutId)
-        val remaining = dao.getAllWorkoutsOnce()
-        val currentProfile = dao.getUserProfileOnce() ?: UserProfile()
-        val streakStatus = DateStreakUtils.calculateStreak(
-            workouts = remaining,
-            storedLongestStreak = currentProfile.longestStreak
-        )
-        dao.upsertUserProfile(
-            currentProfile.copy(
-                currentStreak = streakStatus.currentStreak,
-                longestStreak = streakStatus.longestStreak,
-                lastActiveDate = streakStatus.lastActiveDate,
-                updatedAtMillis = System.currentTimeMillis()
-            )
-        )
+        return streakStatus
     }
 }

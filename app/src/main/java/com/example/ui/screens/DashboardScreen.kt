@@ -19,23 +19,32 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.MilitaryTech
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -53,14 +62,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.ActiveWorkoutDraft
 import com.example.data.model.SportType
+import com.example.domain.AchievementBadge
+import com.example.domain.AdaptiveDailyPlan
+import com.example.domain.AthleteProgression
 import com.example.domain.DateStreakUtils
 import com.example.ui.components.DailyGoalRing
 import com.example.ui.components.GoalSettingDialog
@@ -73,6 +87,7 @@ import com.example.ui.theme.ForestGreenDeep
 import com.example.ui.theme.ForestGreenMedium
 import com.example.ui.theme.MintBright
 import com.example.ui.viewmodel.DashboardData
+import com.example.widget.MoveWidgetProvider
 
 @Composable
 fun DashboardScreen(
@@ -84,8 +99,10 @@ fun DashboardScreen(
     onResumeDraft: (ActiveWorkoutDraft) -> Unit,
     onDiscardDraft: () -> Unit,
     onViewHistory: () -> Unit,
+    onStartAdaptivePlan: (AdaptiveDailyPlan) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var showGoalDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
 
@@ -96,6 +113,7 @@ fun DashboardScreen(
             onSaveGoal = { newGoal ->
                 showGoalDialog = false
                 onUpdateDailyGoal(newGoal)
+                MoveWidgetProvider.refreshAllWidgets(context)
             }
         )
     }
@@ -337,6 +355,10 @@ fun DashboardScreen(
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             StartExerciseHeroCard(onStartExerciseClick = onStartExerciseClick)
+                            AdaptiveDailyPlanCard(
+                                plan = data.adaptivePlan,
+                                onStartPlan = { onStartAdaptivePlan(data.adaptivePlan) }
+                            )
                             MuscleRecoveryHeatmapCard(
                                 report = data.muscleRecovery,
                                 onStartRecommendedSport = onQuickStartSport
@@ -355,6 +377,12 @@ fun DashboardScreen(
                     StartExerciseHeroCard(onStartExerciseClick = onStartExerciseClick)
                 }
                 item {
+                    AdaptiveDailyPlanCard(
+                        plan = data.adaptivePlan,
+                        onStartPlan = { onStartAdaptivePlan(data.adaptivePlan) }
+                    )
+                }
+                item {
                     MuscleRecoveryHeatmapCard(
                         report = data.muscleRecovery,
                         onStartRecommendedSport = onQuickStartSport
@@ -362,14 +390,19 @@ fun DashboardScreen(
                 }
             }
 
-            // Goal reached congratulations banner
+            // Goal reached congratulations banner (shown when a timed daily goal is active & completed)
             item {
-                AnimatedVisibility(visible = data.dailyGoal.isGoalReached) {
+                AnimatedVisibility(visible = !data.dailyGoal.isFreeMode && data.dailyGoal.isGoalReached) {
                     GoalReachedBanner(
                         goalMinutes = data.dailyGoal.goalMinutes,
                         completedMinutes = data.dailyGoal.completedMinutesToday
                     )
                 }
+            }
+
+            // Athlete Level, XP & Achievement Badges Showcase
+            item {
+                AthleteProgressionSection(progression = data.progression)
             }
 
             // Today's live stats row
@@ -520,7 +553,11 @@ private fun DailyGoalCard(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "เป้าหมาย ${goal.goalMinutes} นาที",
+                        text = if (goal.isFreeMode) {
+                            "โหมดเวลาอิสระ (ไม่มีขั้นต่ำ)"
+                        } else {
+                            "เป้าหมาย ${goal.goalMinutes} นาที"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -536,8 +573,13 @@ private fun DailyGoalCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("ปรับเป้า")
+                    Text("ปรับโหมด")
                 }
+            }
+
+            val todayCount = remember(data.workouts) {
+                val today = DateStreakUtils.todayDateString()
+                data.workouts.count { it.activityDate == today }
             }
 
             Row(
@@ -559,15 +601,19 @@ private fun DailyGoalCard(
                 ) {
                     GoalStatRow(
                         label = "เวลาสะสมวันนี้",
-                        value = "${goal.completedMinutesToday} นาที"
+                        value = DateStreakUtils.formatMinutesThai(goal.completedSecondsToday)
                     )
                     GoalStatRow(
-                        label = "เวลาที่เหลือ",
-                        value = if (goal.isGoalReached) "ครบเป้าหมาย!" else "${goal.remainingMinutesToday} นาที"
+                        label = if (goal.isFreeMode) "รูปแบบเวลา" else "เวลาที่เหลือ",
+                        value = when {
+                            goal.isFreeMode -> "เวลาอิสระ"
+                            goal.isGoalReached -> "ครบเป้าหมาย!"
+                            else -> "${goal.remainingMinutesToday} นาที"
+                        }
                     )
                     GoalStatRow(
-                        label = "ความคืบหน้า",
-                        value = "${goal.progressPercent}%"
+                        label = if (goal.isFreeMode) "กิจกรรมวันนี้" else "ความคืบหน้า",
+                        value = if (goal.isFreeMode) "$todayCount ครั้ง" else "${goal.progressPercent}%"
                     )
                 }
             }
@@ -741,6 +787,281 @@ private fun PendingWorkoutDraftCard(
                     Text("ทำกิจกรรมต่อ")
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveDailyPlanCard(
+    plan: AdaptiveDailyPlan,
+    onStartPlan: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, EmeraldVibrant.copy(alpha = 0.45f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("adaptive_plan_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        tint = EmeraldVibrant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "แผนฝึกแนะนำอัตโนมัติวันนี้",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = EmeraldVibrant.copy(alpha = 0.14f)
+                ) {
+                    Text(
+                        text = plan.badgeTag,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ForestGreen,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = plan.titleThai,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = plan.subtitleThai,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Button(
+                onClick = onStartPlan,
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ForestGreen),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("start_adaptive_plan_button")
+            ) {
+                Icon(Icons.Rounded.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (plan.isHiitRecommended) {
+                        "เริ่มตามแผน HIIT (${plan.suggestedWorkSec}/${plan.suggestedRestSec}วิ x ${plan.suggestedRounds})"
+                    } else {
+                        "เริ่มตามแผน (${plan.suggestedSport.thaiName})"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AthleteProgressionSection(progression: AthleteProgression) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("athlete_progression_card")
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(ForestGreenDeep, ForestGreen)
+                        )
+                    )
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(MintBright.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.EmojiEvents,
+                                contentDescription = null,
+                                tint = AmberWarm,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Level ${progression.level} • ${progression.rankTitleThai}",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "ปลดล็อกแล้ว ${progression.unlockedCount}/${progression.badges.size} เหรียญเกียรติยศ",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MintBright
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.White.copy(alpha = 0.14f)
+                    ) {
+                        Text(
+                            text = "${progression.totalXp} XP",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = AmberWarm,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+
+                LinearProgressIndicator(
+                    progress = { progression.levelProgressFraction },
+                    color = MintBright,
+                    trackColor = Color.White.copy(alpha = 0.18f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                )
+
+                Text(
+                    text = "อีก ${progression.xpNeededForNextLevel - progression.xpIntoLevel} XP เพื่อเลื่อนเป็น Level ${progression.level + 1}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.78f)
+                )
+            }
+        }
+
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(progression.badges, key = { it.id }) { badge ->
+                AchievementBadgeCard(badge = badge)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AchievementBadgeCard(badge: AchievementBadge) {
+    val accent = if (badge.unlocked) EmeraldVibrant else MaterialTheme.colorScheme.outline
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (badge.unlocked) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        ),
+        border = BorderStroke(
+            1.dp,
+            if (badge.unlocked) EmeraldVibrant.copy(alpha = 0.65f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+        ),
+        modifier = Modifier
+            .width(156.dp)
+            .testTag("badge_card_${badge.id}")
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = when (badge.iconKey) {
+                        "STREAK", "STREAK7" -> Icons.Rounded.LocalFireDepartment
+                        "BURN" -> Icons.Rounded.Bolt
+                        "DISTANCE" -> Icons.Rounded.Route
+                        "REPS" -> Icons.Rounded.Repeat
+                        else -> Icons.Rounded.MilitaryTech
+                    },
+                    contentDescription = null,
+                    tint = if (badge.unlocked) AmberWarm else accent,
+                    modifier = Modifier.size(22.dp)
+                )
+                Icon(
+                    imageVector = if (badge.unlocked) Icons.Rounded.CheckCircle else Icons.Rounded.Lock,
+                    contentDescription = null,
+                    tint = if (badge.unlocked) EmeraldVibrant else accent.copy(alpha = 0.65f),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            Text(
+                text = badge.titleThai,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = badge.descriptionThai,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                minLines = 2,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            LinearProgressIndicator(
+                progress = { badge.progressFraction },
+                color = if (badge.unlocked) EmeraldVibrant else MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(999.dp))
+            )
+            Text(
+                text = if (badge.unlocked) "ปลดล็อกแล้ว!" else badge.progressLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (badge.unlocked) EmeraldVibrant else MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }

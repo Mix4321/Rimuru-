@@ -66,8 +66,12 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Sensors
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.VolumeOff
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -121,6 +125,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.audio.WorkoutVoiceCoach
 import com.example.camera.GeneralExerciseFocus
 import com.example.camera.PoseMotionAnalyzer
 import com.example.camera.PoseOverlayCanvas
@@ -131,16 +136,24 @@ import com.example.data.model.TrackingMode
 import com.example.domain.DateStreakUtils
 import com.example.sensors.DeviceMotionTracker
 import com.example.sensors.LocationDistanceTracker
+import com.example.share.WorkoutShareHelper
 import com.example.ui.components.MetricTile
+import com.example.ui.components.RouteJsonCodec
+import com.example.ui.components.RouteMapCard
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
 import com.example.ui.theme.ForestGreenDeep
 import com.example.ui.theme.MintBright
+import com.example.ui.viewmodel.HiitPhase
+import com.example.ui.viewmodel.HiitPreset
+import com.example.ui.viewmodel.HiitPresets
 import com.example.ui.viewmodel.ManualEffortLevel
+import com.example.ui.viewmodel.WorkoutTimerStyle
 import com.example.ui.viewmodel.WorkoutUiState
 import com.example.ui.viewmodel.WorkoutViewModel
+import com.example.widget.MoveWidgetProvider
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -204,14 +217,32 @@ fun WorkoutScreen(
             sportProvider = { currentSport },
             sensitivityProvider = { currentSensitivity },
             onDistanceAddedMeters = viewModel::onGpsDistanceAdded,
-            onGpsStateChanged = viewModel::onGpsStateChanged
+            onGpsStateChanged = viewModel::onGpsStateChanged,
+            onRoutePointRecorded = viewModel::onGpsRoutePointRecorded
         )
+    }
+
+    val voiceCoach = remember(context) { WorkoutVoiceCoach(context) }
+
+    LaunchedEffect(uiState.coachCue?.id) {
+        val cue = uiState.coachCue
+        if (cue != null) {
+            if (appSettings.enableVoiceCoach && !uiState.voiceCoachMuted) {
+                voiceCoach.playTone(isHighChime = cue.isHighChime)
+                voiceCoach.speak(
+                    message = cue.textThai,
+                    priority = cue.priority
+                )
+            }
+            viewModel.consumeCoachCue()
+        }
     }
 
     DisposableEffect(Unit) {
         onDispose {
             motionTracker.stop()
             locationTracker.stop()
+            voiceCoach.shutdown()
         }
     }
 
@@ -337,14 +368,11 @@ fun WorkoutScreen(
                 )
             },
             title = {
-                Text("ยังออกกำลังกายไม่ครบ 15 นาที")
+                Text("จับเวลาสั้นกว่า ${DateStreakUtils.MIN_WORKOUT_SECONDS} วินาที")
             },
             text = {
-                val remainText = DateStreakUtils.formatDurationClock(uiState.remainingToMinSeconds)
                 Text(
-                    "ระบบกำหนดเวลาขั้นต่ำ 15 นาทีในการบันทึกกิจกรรม\n\n" +
-                        "• เวลาปัจจุบัน: ${DateStreakUtils.formatDurationClock(uiState.elapsedSeconds)}\n" +
-                        "• เวลาที่เหลือ: $remainText นาที\n\n" +
+                    "คุณจับเวลาไป ${DateStreakUtils.formatDurationClock(uiState.elapsedSeconds)} — กรุณาจับเวลาอย่างน้อย ${DateStreakUtils.MIN_WORKOUT_SECONDS} วินาทีเพื่อบันทึกกิจกรรม\n\n" +
                         "คุณต้องการทำกิจกรรมต่อหรือยกเลิกกิจกรรมนี้?"
                 )
             },
@@ -462,13 +490,39 @@ fun WorkoutScreen(
                     }
                 }
 
-                if (!uiState.cameraPermissionGranted && uiState.trackingMode != TrackingMode.CAMERA_AI) {
-                    OutlinedButton(
-                        onClick = { cameraOnlyLauncher.launch(Manifest.permission.CAMERA) }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    IconButton(
+                        onClick = viewModel::toggleVoiceCoachMute,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("toggle_voice_coach_button")
                     ) {
-                        Icon(Icons.Rounded.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("ใช้กล้อง AI")
+                        Icon(
+                            imageVector = if (uiState.voiceCoachMuted || !appSettings.enableVoiceCoach) {
+                                Icons.Rounded.VolumeOff
+                            } else {
+                                Icons.Rounded.VolumeUp
+                            },
+                            contentDescription = "เปิด/ปิดเสียงโค้ช AI",
+                            tint = if (uiState.voiceCoachMuted || !appSettings.enableVoiceCoach) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            }
+                        )
+                    }
+
+                    if (!uiState.cameraPermissionGranted && uiState.trackingMode != TrackingMode.CAMERA_AI) {
+                        OutlinedButton(
+                            onClick = { cameraOnlyLauncher.launch(Manifest.permission.CAMERA) }
+                        ) {
+                            Icon(Icons.Rounded.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("ใช้กล้อง AI")
+                        }
                     }
                 }
             }
@@ -608,6 +662,10 @@ fun WorkoutScreen(
                     ) {
                         WorkoutMetricsAndControls(
                             uiState = uiState,
+                            selectedExerciseFocus = selectedExerciseFocus,
+                            onSelectTimerStyle = viewModel::setTimerStyle,
+                            onApplyHiitPreset = viewModel::applyHiitPreset,
+                            onUpdateCustomHiit = viewModel::updateCustomHiitConfig,
                             onToggleRun = {
                                 if (uiState.isRunning) viewModel.pauseTimer()
                                 else viewModel.startOrResumeTimer()
@@ -654,6 +712,10 @@ fun WorkoutScreen(
 
                     WorkoutMetricsAndControls(
                         uiState = uiState,
+                        selectedExerciseFocus = selectedExerciseFocus,
+                        onSelectTimerStyle = viewModel::setTimerStyle,
+                        onApplyHiitPreset = viewModel::applyHiitPreset,
+                        onUpdateCustomHiit = viewModel::updateCustomHiitConfig,
                         onToggleRun = {
                             if (uiState.isRunning) viewModel.pauseTimer()
                             else viewModel.startOrResumeTimer()
@@ -1368,55 +1430,241 @@ private fun CameraPosePreview(
 @Composable
 private fun WorkoutMetricsAndControls(
     uiState: WorkoutUiState,
+    selectedExerciseFocus: GeneralExerciseFocus,
+    onSelectTimerStyle: (WorkoutTimerStyle) -> Unit,
+    onApplyHiitPreset: (HiitPreset) -> Unit,
+    onUpdateCustomHiit: (workSec: Int, restSec: Int, rounds: Int) -> Unit,
     onToggleRun: () -> Unit,
     onFinishClick: () -> Unit
 ) {
-    // Clock & 15-min Minimum Progress Card
-    Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
-        modifier = Modifier.fillMaxWidth()
+    // Timer Mode Selector (Free vs HIIT / Circuit)
+    SingleChoiceSegmentedButtonRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("timer_style_selector")
     ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = "ระยะเวลาออกกำลังกาย",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = DateStreakUtils.formatDurationClock(uiState.elapsedSeconds),
-                style = MaterialTheme.typography.displayLarge,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.testTag("workout_timer_text")
-            )
+        WorkoutTimerStyle.entries.forEachIndexed { index, style ->
+            SegmentedButton(
+                selected = uiState.timerStyle == style,
+                onClick = { onSelectTimerStyle(style) },
+                shape = SegmentedButtonDefaults.itemShape(
+                    index = index,
+                    count = WorkoutTimerStyle.entries.size
+                ),
+                icon = {
+                    Icon(
+                        imageVector = if (style == WorkoutTimerStyle.FREE) Icons.Rounded.Timer else Icons.Rounded.Bolt,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                },
+                modifier = Modifier.testTag("timer_style_${style.name}")
+            ) {
+                Text(style.thaiLabel, style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
 
-            LinearProgressIndicator(
-                progress = { uiState.minRequirementProgress },
-                color = if (uiState.canSaveWorkout) EmeraldVibrant else ForestGreen,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+    if (uiState.timerStyle == WorkoutTimerStyle.HIIT) {
+        // HIIT / Circuit Live Phase Card + Presets
+        val phaseContainer = when (uiState.hiitPhase) {
+            HiitPhase.WORK -> ForestGreen
+            HiitPhase.REST -> Color(0xFFB45309)
+            HiitPhase.COMPLETED -> EmeraldVibrant
+        }
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = phaseContainer),
+            elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("hiit_live_card")
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(10.dp)
-                    .clip(RoundedCornerShape(999.dp))
-            )
+                    .padding(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = Color.White.copy(alpha = 0.2f)
+                    ) {
+                        Text(
+                            text = "รอบ ${uiState.hiitCurrentRound}/${uiState.hiitTotalRounds}",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
+                    }
+                    Text(
+                        text = uiState.hiitPhase.thaiLabel,
+                        color = MintBright,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
 
-            Text(
-                text = if (uiState.canSaveWorkout) {
-                    "ผ่านเกณฑ์ขั้นต่ำ 15 นาทีแล้ว — สามารถจบและบันทึกกิจกรรมได้"
-                } else {
-                    "เหลืออีก ${DateStreakUtils.formatDurationClock(uiState.remainingToMinSeconds)} นาที (เคลื่อนไหวจริงแล้ว ${DateStreakUtils.formatDurationClock(uiState.motionActiveSeconds)})"
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
+                Text(
+                    text = if (uiState.hiitPhase == HiitPhase.COMPLETED) "สำเร็จ!" else "${uiState.hiitPhaseRemainingSec} วิ",
+                    style = MaterialTheme.typography.displayLarge,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = "ท่าปัจจุบัน: ${uiState.hiitCircuitLabel} • เวลารวม ${DateStreakUtils.formatDurationClock(uiState.elapsedSeconds)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.9f),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(HiitPresets.ALL, key = { it.id }) { preset ->
+                val active = uiState.hiitWorkSeconds == preset.workSec &&
+                    uiState.hiitRestSeconds == preset.restSec &&
+                    uiState.hiitTotalRounds == preset.rounds
+                FilterChip(
+                    selected = active,
+                    onClick = { onApplyHiitPreset(preset) },
+                    label = { Text(preset.titleThai, style = MaterialTheme.typography.labelMedium) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                )
+            }
+            item {
+                FilterChip(
+                    selected = false,
+                    onClick = {
+                        onUpdateCustomHiit(
+                            uiState.hiitWorkSeconds + 10,
+                            uiState.hiitRestSeconds,
+                            uiState.hiitTotalRounds
+                        )
+                    },
+                    label = { Text("+10วิ ช่วงฝึก") }
+                )
+            }
+        }
+    } else {
+        // Free-Duration Clock Card
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "ระยะเวลาออกกำลังกาย (เวลาอิสระ)",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = DateStreakUtils.formatDurationClock(uiState.elapsedSeconds),
+                    style = MaterialTheme.typography.displayLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.testTag("workout_timer_text")
+                )
+
+                Text(
+                    text = if (uiState.canSaveWorkout) {
+                        "โหมดเวลาอิสระ • เคลื่อนไหวจริงแล้ว ${DateStreakUtils.formatDurationClock(uiState.motionActiveSeconds)} (บันทึกผลได้ทันที)"
+                    } else {
+                        "เริ่มเคลื่อนไหวอย่างน้อย ${DateStreakUtils.MIN_WORKOUT_SECONDS} วินาทีเพื่อบันทึกกิจกรรม (${uiState.elapsedSeconds}/${DateStreakUtils.MIN_WORKOUT_SECONDS}วิ)"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+
+    // Live Plank Hold Pill when Camera AI tracks Plank
+    if (uiState.trackingMode == TrackingMode.CAMERA_AI &&
+        (selectedExerciseFocus == GeneralExerciseFocus.PLANK || uiState.plankHoldSeconds > 0)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = if (uiState.poseSnapshot.isPlankHoldingValid) {
+                EmeraldVibrant.copy(alpha = 0.16f)
+            } else {
+                AmberWarm.copy(alpha = 0.16f)
+            },
+            border = BorderStroke(
+                1.dp,
+                if (uiState.poseSnapshot.isPlankHoldingValid) EmeraldVibrant else AmberWarm
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("plank_hold_card")
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (uiState.poseSnapshot.isPlankHoldingValid) {
+                        "แกนกลางตรงดีมาก — กำลังจับเวลาแพลงก์"
+                    } else {
+                        "จัดลำตัวให้ตรงเพื่อจับเวลาแพลงก์"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = DateStreakUtils.formatDurationClock(uiState.plankHoldSeconds),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+
+    // Latest 1km Pace Split Alert Banner
+    if (uiState.latestSplitBanner != null) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = ForestGreenDeep,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Rounded.Speed, contentDescription = null, tint = MintBright)
+                Text(
+                    text = uiState.latestSplitBanner!!,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 
@@ -1496,6 +1744,15 @@ private fun WorkoutMetricsAndControls(
                 modifier = Modifier.weight(1f)
             )
         }
+    }
+
+    if (uiState.routePoints.size >= 2) {
+        RouteMapCard(
+            routePoints = uiState.routePoints,
+            distanceMeters = uiState.distanceMeters,
+            durationSeconds = uiState.elapsedSeconds,
+            mapHeight = 148.dp
+        )
     }
 
     if (uiState.errorMessage != null) {
@@ -1682,15 +1939,22 @@ private fun PostWorkoutSummaryScreen(
     onStartCoolDown: () -> Unit,
     onDone: () -> Unit
 ) {
+    val context = LocalContext.current
     val session = uiState.savedSession!!
     val outcome = uiState.saveOutcome!!
+    val routePoints = remember(session.routeJson) { RouteJsonCodec.decode(session.routeJson) }
+
+    LaunchedEffect(session.id) {
+        MoveWidgetProvider.refreshAllWidgets(context)
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .padding(24.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
         contentAlignment = Alignment.Center
     ) {
         Card(
@@ -1700,7 +1964,7 @@ private fun PostWorkoutSummaryScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
+                modifier = Modifier.padding(22.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
@@ -1709,7 +1973,7 @@ private fun PostWorkoutSummaryScreen(
                     contentDescription = stringResource(R.string.goal_badge_desc),
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .size(92.dp)
+                        .size(86.dp)
                         .clip(RoundedCornerShape(22.dp))
                 )
 
@@ -1746,6 +2010,50 @@ private fun PostWorkoutSummaryScreen(
                     )
                 }
 
+                if (session.avgFormScore > 0 || session.repsCount > 0 || session.distanceMeters > 0) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (session.repsCount > 0) {
+                            MetricTile(
+                                icon = Icons.Rounded.Repeat,
+                                label = if (session.sport == SportType.JUMP_ROPE) "กระโดด" else "จำนวนครั้ง",
+                                value = "${session.repsCount}",
+                                accentColor = ForestGreen,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (session.distanceMeters > 0) {
+                            MetricTile(
+                                icon = Icons.Rounded.Route,
+                                label = "ระยะทาง",
+                                value = DateStreakUtils.formatDistanceKm(session.distanceMeters),
+                                accentColor = ForestGreen,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (session.avgFormScore > 0) {
+                            MetricTile(
+                                icon = Icons.Rounded.AutoAwesome,
+                                label = "AI ฟอร์มเฉลี่ย",
+                                value = "${session.avgFormScore}%",
+                                accentColor = EmeraldVibrant,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+
+                if (routePoints.size >= 2) {
+                    RouteMapCard(
+                        routePoints = routePoints,
+                        distanceMeters = session.distanceMeters,
+                        durationSeconds = session.durationSeconds,
+                        mapHeight = 152.dp
+                    )
+                }
+
                 Text(
                     text = outcome.updatedStreak.statusMessageThai,
                     style = MaterialTheme.typography.bodyMedium,
@@ -1754,12 +2062,36 @@ private fun PostWorkoutSummaryScreen(
                 )
 
                 Button(
+                    onClick = {
+                        WorkoutShareHelper.shareWorkoutCard(
+                            context = context,
+                            session = session,
+                            streakDays = outcome.updatedStreak.currentStreak
+                        )
+                    },
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = ForestGreen),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .testTag("share_workout_button")
+                ) {
+                    Icon(Icons.Rounded.Share, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "แชร์การ์ดสรุปผล (PNG)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Button(
                     onClick = onStartCoolDown,
                     shape = RoundedCornerShape(18.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = EmeraldVibrant),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(54.dp)
+                        .height(52.dp)
                         .testTag("post_workout_cooldown_button")
                 ) {
                     Icon(Icons.Rounded.AccessibilityNew, contentDescription = null)
@@ -1776,7 +2108,7 @@ private fun PostWorkoutSummaryScreen(
                     shape = RoundedCornerShape(18.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp)
+                        .height(50.dp)
                         .testTag("post_workout_done_button")
                 ) {
                     Text("กลับหน้าหลัก", style = MaterialTheme.typography.titleMedium)

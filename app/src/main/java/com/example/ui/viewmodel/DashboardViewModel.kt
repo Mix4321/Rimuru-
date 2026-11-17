@@ -9,6 +9,8 @@ import com.example.data.model.ActiveWorkoutDraft
 import com.example.data.model.UiState
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutSession
+import com.example.domain.AdaptiveDailyPlan
+import com.example.domain.AthleteProgression
 import com.example.domain.ChartBarPoint
 import com.example.domain.DailyGoalSummary
 import com.example.domain.DateStreakUtils
@@ -31,6 +33,8 @@ data class DashboardData(
     val dailyGoal: DailyGoalSummary,
     val streak: StreakStatus,
     val muscleRecovery: MuscleRecoveryReport,
+    val adaptivePlan: AdaptiveDailyPlan,
+    val progression: AthleteProgression,
     val last7DaysBars: List<ChartBarPoint>,
     val last4WeeksBars: List<ChartBarPoint>,
     val pendingDraft: ActiveWorkoutDraft?
@@ -59,6 +63,8 @@ class DashboardViewModel(
             goalMinutes = safeProfile.dailyGoalMinutes
         )
         val muscleRecovery = MoveAnalyticsEngine.calculateMuscleRecovery(workouts)
+        val adaptivePlan = MoveAnalyticsEngine.buildAdaptiveDailyPlan(muscleRecovery, workouts)
+        val progression = MoveAnalyticsEngine.buildAthleteProgression(workouts, streak)
         UiState.Success(
             DashboardData(
                 profile = safeProfile,
@@ -66,6 +72,8 @@ class DashboardViewModel(
                 dailyGoal = dailyGoal,
                 streak = streak,
                 muscleRecovery = muscleRecovery,
+                adaptivePlan = adaptivePlan,
+                progression = progression,
                 last7DaysBars = DateStreakUtils.buildLast7DaysBars(workouts),
                 last4WeeksBars = DateStreakUtils.buildLast4WeeksBars(workouts),
                 pendingDraft = draft
@@ -102,7 +110,13 @@ class DashboardViewModel(
     fun updateDailyGoal(minutes: Int) {
         viewModelScope.launch {
             repository.updateDailyGoal(minutes)
-                .onSuccess { _actionMessage.value = "บันทึกเป้าหมายรายวัน $minutes นาทีแล้ว" }
+                .onSuccess {
+                    _actionMessage.value = if (minutes <= 0) {
+                        "เปลี่ยนเป็นโหมดเวลาอิสระแล้ว"
+                    } else {
+                        "บันทึกเป้าหมายรายวัน $minutes นาทีแล้ว"
+                    }
+                }
                 .onFailure { err ->
                     _actionMessage.value = "บันทึกเป้าหมายไม่สำเร็จ: ${err.localizedMessage ?: "ลองใหม่อีกครั้ง"}"
                 }

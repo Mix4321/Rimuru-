@@ -79,4 +79,32 @@ class DateStreakUtilsTest {
         assertTrue(summary.isGoalReached)
         assertEquals(290, summary.caloriesToday)
     }
+
+    @Test
+    fun freeModeDailyGoalAllowsFlexibleMinutesWithoutFloor() {
+        val today = "2026-11-16"
+        val workouts = listOf(
+            workoutOn("2026-11-16", 120, calories = 25) // 2 minutes
+        )
+        val summary = DateStreakUtils.calculateDailyGoalSummary(workouts, goalMinutes = 0, today = today)
+        assertTrue(summary.isFreeMode)
+        assertEquals(0, summary.goalMinutes)
+        assertEquals(2, summary.completedMinutesToday)
+        assertEquals(100, summary.progressPercent)
+        assertTrue(summary.isGoalReached)
+        assertEquals(25, summary.caloriesToday)
+    }
+
+    @Test
+    fun shortFiveSecondWorkoutQualifiesForStreakUnderFreeDuration() {
+        val today = "2026-11-16"
+        val workouts = listOf(
+            workoutOn("2026-11-15", 10),
+            workoutOn("2026-11-16", 5),
+            workoutOn("2026-11-14", 3) // below 5s minimum
+        )
+        val status = DateStreakUtils.calculateStreak(workouts, storedLongestStreak = 0, today = today)
+        assertEquals(2, status.currentStreak)
+        assertTrue(status.hasCompletedToday)
+    }
 }

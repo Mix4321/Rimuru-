@@ -9,4 +9,6 @@
     <string name="nav_history">ประวัติ</string>
     <string name="nav_settings">ตั้งค่า</string>
     <string name="error_sign_in_cancelled">ยกเลิกการเข้าสู่ระบบ กรุณาเลือกบัญชีเพื่อดำเนินการต่อ</string>
+    <string name="widget_move_label">สรุป MOVE รายวัน</string>
+    <string name="widget_move_description">ดูเวลาออกกำลังกาย แคลอรี และ Streak วันนี้จากหน้าจอหลัก</string>
 </resources>

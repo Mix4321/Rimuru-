@@ -103,7 +103,7 @@ fun SportSelectionScreen(
             color = MaterialTheme.colorScheme.onBackground
         )
         Text(
-            text = "เลือกกิจกรรมที่คุณต้องการออกกำลังกายวันนี้ (ขั้นต่ำ 15 นาทีเพื่อบันทึกผล)",
+            text = "เลือกกิจกรรมที่คุณต้องการวันนี้ — บันทึกเวลาอิสระได้ทุกช่วงเวลา หรือใช้โหมด HIIT",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -338,7 +338,7 @@ private fun SportReadySheetContent(
                 ) {
                     Icon(Icons.Rounded.Timer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Text(
-                        text = "เงื่อนไขบันทึกกิจกรรม: ออกกำลังกายอย่างน้อย 15 นาที",
+                        text = "โหมดเวลาอิสระ: จับเวลาได้ทุกช่วงและบันทึกผลได้ทันที หรือเลือก HIIT สลับช่วงได้ในหน้าฝึก",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )

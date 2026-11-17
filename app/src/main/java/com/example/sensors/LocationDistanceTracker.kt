@@ -29,7 +29,8 @@ class LocationDistanceTracker(
     private val sportProvider: () -> SportType,
     private val sensitivityProvider: () -> DetectionSensitivity,
     private val onDistanceAddedMeters: (Int) -> Unit,
-    private val onGpsStateChanged: (GpsTrackingSnapshot) -> Unit
+    private val onGpsStateChanged: (GpsTrackingSnapshot) -> Unit,
+    private val onRoutePointRecorded: (lat: Double, lng: Double, speedKmh: Float) -> Unit = { _, _, _ -> }
 ) : LocationListener {
 
     private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
@@ -161,13 +162,15 @@ class LocationDistanceTracker(
         val prev = lastValidLocation
         if (prev == null) {
             lastValidLocation = location
+            val initialSpeed = if (location.hasSpeed() && location.speed > 0.45f) location.speed * 3.6f else 0f
+            onRoutePointRecorded(location.latitude, location.longitude, initialSpeed)
             onGpsStateChanged(
                 GpsTrackingSnapshot(
                     hasLocationPermission = true,
                     isGpsEnabled = true,
                     hasFix = true,
                     accuracyMeters = accuracy,
-                    currentSpeedKmh = if (location.hasSpeed() && location.speed > 0.45f) location.speed * 3.6f else 0f
+                    currentSpeedKmh = initialSpeed
                 )
             )
             return
@@ -190,9 +193,11 @@ class LocationDistanceTracker(
             location.hasSpeed() && location.speed in 0.35f..maxPlausibleSpeedMps -> location.speed
             else -> impliedSpeedMps
         }
+        val roundedSpeedKmh = (measuredSpeedMps * 3.6f * 10f).roundToInt() / 10f
 
         if (isGenuineMovement) {
             lastValidLocation = location
+            onRoutePointRecorded(location.latitude, location.longitude, roundedSpeedKmh)
             pendingMetersBuffer += deltaMeters
             val wholeMeters = pendingMetersBuffer.toInt()
             if (wholeMeters >= 1) {
@@ -207,7 +212,7 @@ class LocationDistanceTracker(
                 isGpsEnabled = true,
                 hasFix = true,
                 accuracyMeters = accuracy,
-                currentSpeedKmh = (measuredSpeedMps * 3.6f * 10f).roundToInt() / 10f
+                currentSpeedKmh = roundedSpeedKmh
             )
         )
     }

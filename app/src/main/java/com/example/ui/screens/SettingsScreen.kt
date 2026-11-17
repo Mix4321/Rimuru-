@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -22,16 +24,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccessibilityNew
+import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.GpsFixed
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.ScreenLockPortrait
 import androidx.compose.material.icons.rounded.Sensors
+import androidx.compose.material.icons.rounded.TableChart
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material.icons.rounded.VolumeUp
@@ -56,10 +63,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,6 +84,11 @@ import com.example.data.local.ThemeMode
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.viewmodel.SettingsViewModel
+import com.example.widget.MoveWidgetProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Locale
 import kotlin.math.roundToInt
 
 @Composable
@@ -85,11 +97,76 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val profile by viewModel.profile.collectAsStateWithLifecycle()
+    val totalWorkoutsCount by viewModel.totalWorkoutsCount.collectAsStateWithLifecycle()
 
     var showBodyMetricsDialog by remember { mutableStateOf(false) }
     var showResetConfirmDialog by remember { mutableStateOf(false) }
+
+    val exportJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val content = viewModel.buildJsonBackup()
+                        context.contentResolver.openOutputStream(uri)?.use { stream ->
+                            stream.write(content.toByteArray(Charsets.UTF_8))
+                        } ?: error("ไม่สามารถเปิดไฟล์ปลายทางได้")
+                    }.isSuccess
+                }
+                viewModel.notifyMessage(
+                    if (ok) "ส่งออกไฟล์สำรองข้อมูล JSON เรียบร้อยแล้ว" else "ส่งออกไฟล์ JSON ไม่สำเร็จ"
+                )
+            }
+        }
+    }
+
+    val exportCsvLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val csv = viewModel.buildCsvExport()
+                        context.contentResolver.openOutputStream(uri)?.use { stream ->
+                            stream.write(csv.toByteArray(Charsets.UTF_8))
+                        } ?: error("ไม่สามารถเปิดไฟล์ปลายทางได้")
+                    }.isSuccess
+                }
+                viewModel.notifyMessage(
+                    if (ok) "ส่งออกไฟล์ CSV (เปิดใน Excel ได้ทันที) เรียบร้อยแล้ว" else "ส่งออกไฟล์ CSV ไม่สำเร็จ"
+                )
+            }
+        }
+    }
+
+    val importJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val raw = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use {
+                            it.readText()
+                        }
+                    }.getOrNull()
+                }
+                if (raw.isNullOrBlank()) {
+                    viewModel.notifyMessage("ไม่สามารถอ่านไฟล์ที่เลือกได้")
+                } else {
+                    viewModel.importBackupJson(raw) {
+                        MoveWidgetProvider.refreshAllWidgets(context)
+                    }
+                }
+            }
+        }
+    }
 
     var hasCameraPerm by remember { mutableStateOf(checkPerm(context, Manifest.permission.CAMERA)) }
     var hasLocationPerm by remember { mutableStateOf(checkPerm(context, Manifest.permission.ACCESS_FINE_LOCATION)) }
@@ -149,14 +226,43 @@ fun SettingsScreen(
                         )
                     }
                     Text(
-                        text = "เป้าหมายรายวัน: $goalMinutes นาที/วัน",
+                        text = if (goalMinutes <= 0) {
+                            "รูปแบบเป้าหมาย: โหมดเวลาอิสระ (ไม่กำหนดขั้นต่ำ)"
+                        } else {
+                            "เป้าหมายรายวัน: $goalMinutes นาที/วัน"
+                        },
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold
                     )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = goalMinutes == 0,
+                            onClick = { goalMinutes = 0 },
+                            label = { Text("เวลาอิสระ") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        )
+                        listOf(20, 45, 60).forEach { min ->
+                            FilterChip(
+                                selected = goalMinutes == min,
+                                onClick = { goalMinutes = min },
+                                label = { Text("${min}น.") },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                )
+                            )
+                        }
+                    }
                     Slider(
                         value = goalMinutes.toFloat(),
-                        onValueChange = { goalMinutes = ((it / 5f).roundToInt() * 5).coerceIn(15, 180) },
-                        valueRange = 15f..180f
+                        onValueChange = { goalMinutes = ((it / 5f).roundToInt() * 5).coerceIn(0, 180) },
+                        valueRange = 0f..180f
                     )
                 }
             },
@@ -170,6 +276,7 @@ fun SettingsScreen(
                             heightCm = heightInput.toFloatOrNull() ?: settings.userHeightCm,
                             dailyGoalMinutes = goalMinutes
                         )
+                        MoveWidgetProvider.refreshAllWidgets(context)
                     }
                 ) {
                     Text("บันทึก")
@@ -242,12 +349,18 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
+                        val goalDesc = if (profile.dailyGoalMinutes <= 0) {
+                            "โหมดเวลาอิสระ"
+                        } else {
+                            "เป้าหมาย ${profile.dailyGoalMinutes} นาที/วัน"
+                        }
                         Text(
                             text = String.format(
-                                "ระยะก้าวเดิน %.2f ม. • ก้าววิ่ง %.2f ม. • เป้าหมาย %d นาที/วัน",
+                                Locale.US,
+                                "ระยะก้าวเดิน %.2f ม. • ก้าววิ่ง %.2f ม. • %s",
                                 settings.walkStrideMeters,
                                 settings.runStrideMeters,
-                                profile.dailyGoalMinutes
+                                goalDesc
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -302,6 +415,15 @@ fun SettingsScreen(
                         checked = settings.autoNotifyWhenIdle,
                         onCheckedChange = viewModel::setAutoNotifyWhenIdle,
                         testTag = "switch_auto_notify_idle"
+                    )
+
+                    SettingsSwitchRow(
+                        icon = Icons.Rounded.RecordVoiceOver,
+                        title = "เสียงโค้ช AI ระหว่างออกกำลังกาย (Thai TTS)",
+                        subtitle = "ขานจำนวนครั้งครบทุก 5 ครั้ง เตือนเพซทุก 1 กม. และแจ้งช่วงพัก HIIT",
+                        checked = settings.enableVoiceCoach,
+                        onCheckedChange = viewModel::setEnableVoiceCoach,
+                        testTag = "switch_voice_coach"
                     )
                 }
             }
@@ -423,6 +545,57 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("จัดการสิทธิ์แอปในการตั้งค่า Android")
+                    }
+                }
+            }
+        }
+
+        // 5.5 Backup & Export (SAF Zero-Permission)
+        item {
+            SettingsSectionCard(title = "สำรองและส่งออกข้อมูล ($totalWorkoutsCount กิจกรรม)", icon = Icons.Rounded.Backup) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "สำรองประวัติกิจกรรมทั้งหมดเป็นไฟล์ JSON เพื่อย้ายเครื่อง หรือส่งออก CSV ไปเปิดใน Excel / Google Sheets (ไม่ต้องขอสิทธิ์พื้นที่จัดเก็บ)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { exportJsonLauncher.launch("move_backup_${System.currentTimeMillis() / 1000}.json") },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("export_json_button")
+                        ) {
+                            Icon(Icons.Rounded.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("สำรอง JSON", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = { exportCsvLauncher.launch("move_workouts_${System.currentTimeMillis() / 1000}.csv") },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("export_csv_button")
+                        ) {
+                            Icon(Icons.Rounded.TableChart, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("ส่งออก CSV", maxLines = 1)
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = { importJsonLauncher.launch(arrayOf("application/json", "text/*")) },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("import_json_button")
+                    ) {
+                        Icon(Icons.Rounded.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("นำเข้าและกู้คืนข้อมูลจากไฟล์ JSON")
                     }
                 }
             }

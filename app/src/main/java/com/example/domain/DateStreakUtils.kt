@@ -17,13 +17,14 @@ data class StreakStatus(
 )
 
 data class DailyGoalSummary(
-    val goalMinutes: Int,
+    val goalMinutes: Int, // 0 = เวลาอิสระ (Free Mode)
     val completedSecondsToday: Int,
     val completedMinutesToday: Int,
     val remainingMinutesToday: Int,
     val progressFraction: Float,
     val progressPercent: Int,
     val isGoalReached: Boolean,
+    val isFreeMode: Boolean,
     val caloriesToday: Int,
     val stepsToday: Int,
     val distanceMetersToday: Int
@@ -36,8 +37,8 @@ data class ChartBarPoint(
 )
 
 object DateStreakUtils {
-    const val MIN_WORKOUT_SECONDS = 900 // 15 minutes required to save a workout
-    const val MIN_STREAK_DAY_SECONDS = 60 // >= 1 minute/day qualifies to maintain/increment Streak
+    const val MIN_WORKOUT_SECONDS = 5 // เวลาอิสระ: จับเวลาตั้งแต่ 5 วินาทีขึ้นไปก็บันทึกได้ทันที
+    const val MIN_STREAK_DAY_SECONDS = 5 // กิจกรรมที่บันทึกในวันนั้นช่วยสร้าง Streak ต่อเนื่องได้ทันที
 
     private val isoFormat: ThreadLocal<SimpleDateFormat> = ThreadLocal.withInitial {
         SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -164,8 +165,8 @@ object DateStreakUtils {
         val message = when {
             hasCompletedToday && streak == 1 -> "เริ่มต้น Streak วันแรกสำเร็จแล้ว!"
             hasCompletedToday && streak > 1 -> "ยอดเยี่ยม! รักษาความต่อเนื่องครบวันนี้แล้ว"
-            streak > 0 -> "ออกกำลังกายอย่างน้อย 1 นาทีวันนี้เพื่อเพิ่มเป็น ${streak + 1} วัน"
-            else -> "เริ่มออกกำลังกายวันนี้เพื่อสร้าง Streak วันแรก"
+            streak > 0 -> "ออกกำลังกายวันนี้เพื่อเพิ่มสถิติต่อเนื่องเป็น ${streak + 1} วัน"
+            else -> "เริ่มออกกำลังกายวันนี้ตามเวลาอิสระเพื่อสร้าง Streak วันแรก"
         }
 
         return StreakStatus(
@@ -182,7 +183,8 @@ object DateStreakUtils {
         goalMinutes: Int,
         today: String = todayDateString()
     ): DailyGoalSummary {
-        val safeGoal = goalMinutes.coerceIn(5, 300)
+        val safeGoal = goalMinutes.coerceIn(0, 300)
+        val isFreeMode = safeGoal == 0
         val todayWorkouts = workouts.filter {
             val day = it.activityDate.ifBlank {
                 if (it.startedAtMillis > 0L) dateStringFromMillis(it.startedAtMillis) else ""
@@ -191,10 +193,18 @@ object DateStreakUtils {
         }
         val totalSeconds = todayWorkouts.sumOf { max(0, it.durationSeconds) }
         val completedMinutes = totalSeconds / 60
-        val remainingMinutes = max(0, safeGoal - completedMinutes)
+        val remainingMinutes = if (isFreeMode) 0 else max(0, safeGoal - completedMinutes)
         val goalSeconds = safeGoal * 60
-        val fraction = if (goalSeconds > 0) min(1.5f, totalSeconds.toFloat() / goalSeconds.toFloat()) else 0f
-        val percent = if (safeGoal > 0) ((totalSeconds * 100.0) / goalSeconds).toInt().coerceAtLeast(0) else 0
+        val fraction = if (isFreeMode) {
+            if (totalSeconds > 0) 1f else 0f
+        } else {
+            min(1.5f, totalSeconds.toFloat() / goalSeconds.toFloat())
+        }
+        val percent = if (isFreeMode) {
+            if (totalSeconds > 0) 100 else 0
+        } else {
+            ((totalSeconds * 100.0) / goalSeconds).toInt().coerceAtLeast(0)
+        }
 
         return DailyGoalSummary(
             goalMinutes = safeGoal,
@@ -203,7 +213,8 @@ object DateStreakUtils {
             remainingMinutesToday = remainingMinutes,
             progressFraction = fraction.coerceIn(0f, 1f),
             progressPercent = percent,
-            isGoalReached = totalSeconds >= goalSeconds,
+            isGoalReached = if (isFreeMode) totalSeconds >= MIN_WORKOUT_SECONDS else totalSeconds >= goalSeconds,
+            isFreeMode = isFreeMode,
             caloriesToday = todayWorkouts.sumOf { max(0, it.caloriesBurned) },
             stepsToday = todayWorkouts.sumOf { max(0, it.steps) },
             distanceMetersToday = todayWorkouts.sumOf { max(0, it.distanceMeters) }

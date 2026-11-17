@@ -334,4 +334,112 @@ class BiomechanicalRepEngineTest {
         }
         assertEquals("Real squats should count all 2 reps", 2, reps)
     }
+
+    @Test
+    fun `plank hold validates straight alignment and pauses when hips sag`() {
+        val engine = BiomechanicalRepEngine()
+        var t = 60_000L
+
+        val straightPlank = sidePushUpPose(shoulderDropY = 4f, elbowDropY = 8f, hipSagY = 0f)
+        val validOut = engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.PLANK, straightPlank, 152f, true, DetectionSensitivity.BALANCED, t)
+        assertTrue("Straight plank must be valid hold", validOut.isPlankHoldingValid)
+        assertTrue("Straight plank must be horizontal plank", validOut.isHorizontalPlank)
+
+        t += 200L
+        val saggingPlank = sidePushUpPose(shoulderDropY = 4f, elbowDropY = 8f, hipSagY = 95f)
+        val sagOut = engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.PLANK, saggingPlank, 152f, true, DetectionSensitivity.BALANCED, t)
+        assertFalse("Sagging hip plank must fail alignment check", sagOut.isPlankHoldingValid)
+    }
+
+    @Test
+    fun `sit-ups in floor knee-bent posture count accurate curl reps`() {
+        val engine = BiomechanicalRepEngine()
+        var reps = 0
+        var t = 70_000L
+
+        fun sitUpPose(shoulderX: Float, shoulderY: Float): Map<Int, PointF> {
+            return mapOf(
+                PoseLandmark.NOSE to PointF(shoulderX - 18f, shoulderY - 12f),
+                PoseLandmark.LEFT_SHOULDER to PointF(shoulderX, shoulderY),
+                PoseLandmark.RIGHT_SHOULDER to PointF(shoulderX + 6f, shoulderY + 4f),
+                PoseLandmark.LEFT_ELBOW to PointF(shoulderX + 20f, shoulderY - 15f),
+                PoseLandmark.RIGHT_ELBOW to PointF(shoulderX + 24f, shoulderY - 12f),
+                PoseLandmark.LEFT_WRIST to PointF(shoulderX + 10f, shoulderY - 22f),
+                PoseLandmark.RIGHT_WRIST to PointF(shoulderX + 14f, shoulderY - 20f),
+                PoseLandmark.LEFT_HIP to PointF(260f, 440f),
+                PoseLandmark.RIGHT_HIP to PointF(265f, 442f),
+                PoseLandmark.LEFT_KNEE to PointF(355f, 385f),
+                PoseLandmark.RIGHT_KNEE to PointF(360f, 387f),
+                PoseLandmark.LEFT_ANKLE to PointF(415f, 445f),
+                PoseLandmark.RIGHT_ANKLE to PointF(420f, 447f)
+            )
+        }
+
+        repeat(2) {
+            // Lying back (>125 deg torso-hip-knee)
+            repeat(4) {
+                t += 120L
+                val pts = sitUpPose(shoulderX = 120f, shoulderY = 435f)
+                reps += engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.SITUP, pts, 142f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+            // Crunch up toward knees (<75 deg)
+            repeat(4) {
+                t += 120L
+                val pts = sitUpPose(shoulderX = 285f, shoulderY = 305f)
+                reps += engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.SITUP, pts, 142f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+            // Lower back down
+            repeat(4) {
+                t += 120L
+                val pts = sitUpPose(shoulderX = 120f, shoulderY = 435f)
+                reps += engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.SITUP, pts, 142f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+        }
+        assertEquals("Sit-up curl reps should count 2", 2, reps)
+    }
+
+    @Test
+    fun `split-stance lunges count accurate reps`() {
+        val engine = BiomechanicalRepEngine()
+        var reps = 0
+        var t = 80_000L
+
+        fun lungePose(hipDrop: Float, frontKneeBend: Boolean): Map<Int, PointF> {
+            val shoulderY = 210f + hipDrop
+            val hipY = 350f + hipDrop
+            val kneeY = if (frontKneeBend) 435f else 460f
+            val lKneeX = if (frontKneeBend) 170f else 195f
+            return mapOf(
+                PoseLandmark.NOSE to PointF(240f, shoulderY - 45f),
+                PoseLandmark.LEFT_SHOULDER to PointF(215f, shoulderY),
+                PoseLandmark.RIGHT_SHOULDER to PointF(265f, shoulderY),
+                PoseLandmark.LEFT_ELBOW to PointF(205f, shoulderY + 60f),
+                PoseLandmark.RIGHT_ELBOW to PointF(275f, shoulderY + 60f),
+                PoseLandmark.LEFT_WRIST to PointF(200f, shoulderY + 115f),
+                PoseLandmark.RIGHT_WRIST to PointF(280f, shoulderY + 115f),
+                PoseLandmark.LEFT_HIP to PointF(220f, hipY),
+                PoseLandmark.RIGHT_HIP to PointF(260f, hipY),
+                PoseLandmark.LEFT_KNEE to PointF(lKneeX, kneeY),
+                PoseLandmark.RIGHT_KNEE to PointF(300f, 475f),
+                PoseLandmark.LEFT_ANKLE to PointF(168f, 560f),
+                PoseLandmark.RIGHT_ANKLE to PointF(345f, 560f)
+            )
+        }
+
+        repeat(2) {
+            repeat(4) {
+                t += 120L
+                reps += engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.LUNGE, lungePose(0f, false), 140f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+            repeat(4) {
+                t += 120L
+                reps += engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.LUNGE, lungePose(65f, true), 140f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+            repeat(4) {
+                t += 120L
+                reps += engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.LUNGE, lungePose(0f, false), 140f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+        }
+        assertEquals("Real split-stance lunges should count 2 reps", 2, reps)
+    }
 }

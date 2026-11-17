@@ -47,9 +47,9 @@ class MoveAnalyticsEngineTest {
     fun `ghost rival selects best qualifying workout and interpolates linearly`() {
         val sessions = listOf(
             WorkoutSession(
-                id = "short",
+                id = "too_short",
                 sportType = SportType.RUNNING.name,
-                durationSeconds = 300, // under 15-min minimum
+                durationSeconds = 3, // under 5-sec minimum
                 distanceMeters = 5000,
                 activityDate = "2026-11-10"
             ),
@@ -84,5 +84,67 @@ class MoveAnalyticsEngineTest {
 
         val noBadmintonRival = MoveAnalyticsEngine.findBestGhostRival(sessions, SportType.BADMINTON)
         assertFalse(noBadmintonRival.hasRival)
+    }
+
+    @Test
+    fun `adaptive daily plan recommends HIIT when fresh and active recovery when fatigued`() {
+        val freshReport = MoveAnalyticsEngine.calculateMuscleRecovery(emptyList(), nowMillis = 1_000_000L)
+        val freshPlan = MoveAnalyticsEngine.buildAdaptiveDailyPlan(freshReport, emptyList())
+        assertTrue(freshPlan.isHiitRecommended)
+
+        val now = 10_000_000_000L
+        val heavyWorkouts = listOf(
+            WorkoutSession(id = "h1", sportType = SportType.RUNNING.name, durationSeconds = 3600, startedAtMillis = now - 3600_000L, endedAtMillis = now),
+            WorkoutSession(id = "h2", sportType = SportType.BADMINTON.name, durationSeconds = 3600, startedAtMillis = now - 7200_000L, endedAtMillis = now)
+        )
+        val fatiguedReport = MoveAnalyticsEngine.calculateMuscleRecovery(heavyWorkouts, nowMillis = now)
+        val recoveryPlan = MoveAnalyticsEngine.buildAdaptiveDailyPlan(fatiguedReport, heavyWorkouts)
+        assertFalse(recoveryPlan.isHiitRecommended)
+        assertEquals(SportType.WALKING, recoveryPlan.suggestedSport)
+    }
+
+    @Test
+    fun `athlete progression computes XP level and unlocks earned badges`() {
+        val workouts = listOf(
+            WorkoutSession(
+                id = "w1",
+                sportType = SportType.GENERAL.name,
+                trackingMode = "CAMERA_AI",
+                workoutSubType = "HIIT",
+                durationSeconds = 600,
+                caloriesBurned = 550,
+                repsCount = 60,
+                distanceMeters = 3200,
+                avgFormScore = 94,
+                activityDate = "2026-11-15"
+            ),
+            WorkoutSession(
+                id = "w2",
+                sportType = SportType.RUNNING.name,
+                trackingMode = "CAMERA_AI",
+                workoutSubType = "FREE",
+                durationSeconds = 300,
+                caloriesBurned = 90,
+                activityDate = "2026-11-16"
+            )
+        )
+        val streak = com.example.domain.StreakStatus(
+            currentStreak = 3,
+            longestStreak = 3,
+            hasCompletedToday = true,
+            lastActiveDate = "2026-11-16",
+            statusMessageThai = "ok"
+        )
+        val prog = MoveAnalyticsEngine.buildAthleteProgression(workouts, streak)
+        assertTrue(prog.level >= 2)
+        assertTrue(prog.totalXp > 250)
+        assertEquals(8, prog.badges.size)
+        assertTrue(prog.badges.first { it.id == "first_step" }.unlocked)
+        assertTrue(prog.badges.first { it.id == "streak_3" }.unlocked)
+        assertTrue(prog.badges.first { it.id == "kcal_500" }.unlocked)
+        assertTrue(prog.badges.first { it.id == "ai_form_90" }.unlocked)
+        assertTrue(prog.badges.first { it.id == "distance_3km" }.unlocked)
+        assertTrue(prog.badges.first { it.id == "rep_master_50" }.unlocked)
+        assertTrue(prog.badges.first { it.id == "hiit_challenger" }.unlocked)
     }
 }

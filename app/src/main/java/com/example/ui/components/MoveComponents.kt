@@ -113,17 +113,31 @@ fun DailyGoalRing(
         }
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "$progressPercent%",
-                style = MaterialTheme.typography.displayMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "$completedMinutes / $goalMinutes นาที",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (goalMinutes <= 0) {
+                Text(
+                    text = if (completedMinutes > 0) "${completedMinutes}น." else "อิสระ",
+                    style = MaterialTheme.typography.displaySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "เวลาอิสระวันนี้",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Text(
+                    text = "$progressPercent%",
+                    style = MaterialTheme.typography.displayMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "$completedMinutes / $goalMinutes นาที",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -267,9 +281,9 @@ fun GoalSettingDialog(
     onSaveGoal: (Int) -> Unit
 ) {
     var sliderValue by remember(currentGoalMinutes) {
-        mutableFloatStateOf(currentGoalMinutes.coerceIn(10, 180).toFloat())
+        mutableFloatStateOf(currentGoalMinutes.coerceIn(0, 180).toFloat())
     }
-    val presets = listOf(15, 30, 45, 60, 90)
+    val presets = listOf(0, 10, 20, 45, 60, 90)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -282,23 +296,24 @@ fun GoalSettingDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(
-                    text = "เลือกเวลาออกกำลังกายที่ต้องการทำได้ในแต่ละวัน",
+                    text = "เลือกเวลาอิสระ (ไม่จำกัดเวลา) หรือกำหนดนาทีเป้าหมายต่อวันที่ต้องการ",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
+                val selectedMins = sliderValue.roundToInt()
                 Text(
-                    text = "${sliderValue.roundToInt()} นาที / วัน",
-                    style = MaterialTheme.typography.headlineLarge,
+                    text = if (selectedMins == 0) "โหมดเวลาอิสระ (ไม่กำหนดขั้นต่ำ)" else "$selectedMins นาที / วัน",
+                    style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
 
                 Slider(
                     value = sliderValue,
-                    onValueChange = { sliderValue = it },
-                    valueRange = 15f..120f,
-                    steps = 20,
+                    onValueChange = { sliderValue = ((it / 5f).roundToInt() * 5).coerceIn(0, 180).toFloat() },
+                    valueRange = 0f..180f,
                     colors = SliderDefaults.colors(
                         thumbColor = ForestGreen,
                         activeTrackColor = ForestGreen
@@ -310,11 +325,11 @@ fun GoalSettingDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     presets.forEach { preset ->
-                        val selected = sliderValue.roundToInt() == preset
+                        val selected = selectedMins == preset
                         FilterChip(
                             selected = selected,
                             onClick = { sliderValue = preset.toFloat() },
-                            label = { Text("$preset นาที") },
+                            label = { Text(if (preset == 0) "เวลาอิสระ" else "$preset นาที") },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = MaterialTheme.colorScheme.primary,
                                 selectedLabelColor = MaterialTheme.colorScheme.onPrimary

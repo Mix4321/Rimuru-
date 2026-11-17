@@ -2,6 +2,7 @@ package com.example.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.backup.MoveBackupManager
 import com.example.data.local.AppSettings
 import com.example.data.local.DetectionSensitivity
 import com.example.data.local.MoveRepository
@@ -36,6 +37,14 @@ class SettingsViewModel(
             initialValue = UserProfile()
         )
 
+    val totalWorkoutsCount: StateFlow<Int> = repository.observeWorkouts()
+        .map { it.size }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = 0
+        )
+
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
@@ -54,6 +63,12 @@ class SettingsViewModel(
     fun setEnableStretchBeep(enabled: Boolean) {
         viewModelScope.launch {
             settingsStore.updateSettings { it.copy(enableStretchBeep = enabled) }
+        }
+    }
+
+    fun setEnableVoiceCoach(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.updateSettings { it.copy(enableVoiceCoach = enabled) }
         }
     }
 
@@ -90,12 +105,45 @@ class SettingsViewModel(
         viewModelScope.launch {
             val safeWeight = weightKg.coerceIn(25f, 250f)
             val safeHeight = heightCm.coerceIn(120f, 220f)
-            val safeGoal = dailyGoalMinutes.coerceIn(15, 240)
+            val safeGoal = dailyGoalMinutes.coerceIn(0, 240)
             repository.updateProfile(displayName, safeWeight)
             repository.updateDailyGoal(safeGoal)
             settingsStore.updateSettings { it.copy(userHeightCm = safeHeight) }
             _statusMessage.value = "บันทึกข้อมูลร่างกายและการตั้งค่าแล้ว"
         }
+    }
+
+    suspend fun buildJsonBackup(): String {
+        val currentProfile = repository.getUserProfileOnce()
+        val workouts = repository.getAllWorkoutsOnce()
+        return MoveBackupManager.exportToJson(currentProfile, workouts)
+    }
+
+    suspend fun buildCsvExport(): String {
+        val workouts = repository.getAllWorkoutsOnce()
+        return MoveBackupManager.exportToCsv(workouts)
+    }
+
+    fun importBackupJson(rawJson: String, onCompleted: () -> Unit = {}) {
+        viewModelScope.launch {
+            val parsed = MoveBackupManager.parseBackupJson(rawJson)
+            parsed.onSuccess { payload ->
+                repository.importWorkoutsFromBackup(payload.workouts, payload.profile)
+                    .onSuccess { importedCount ->
+                        _statusMessage.value = "นำเข้าข้อมูลสำเร็จ ($importedCount รายการใหม่)"
+                        onCompleted()
+                    }
+                    .onFailure { err ->
+                        _statusMessage.value = "นำเข้าข้อมูลไม่สำเร็จ: ${err.localizedMessage ?: "ไฟล์ไม่ถูกต้อง"}"
+                    }
+            }.onFailure {
+                _statusMessage.value = "รูปแบบไฟล์สำรอง JSON ไม่ถูกต้อง"
+            }
+        }
+    }
+
+    fun notifyMessage(message: String) {
+        _statusMessage.value = message
     }
 
     fun resetSettingsToDefaults() {

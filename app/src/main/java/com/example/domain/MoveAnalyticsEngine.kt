@@ -2,6 +2,7 @@ package com.example.domain
 
 import com.example.data.model.SportType
 import com.example.data.model.WorkoutSession
+import java.util.Locale
 import kotlin.math.roundToInt
 
 enum class MuscleGroup(val thaiName: String) {
@@ -58,6 +59,38 @@ data class GhostProgress(
     val meters: Int = 0,
     val reps: Int = 0,
     val calories: Int = 0
+)
+
+data class AdaptiveDailyPlan(
+    val titleThai: String,
+    val subtitleThai: String,
+    val suggestedSport: SportType,
+    val suggestedWorkSec: Int,
+    val suggestedRestSec: Int,
+    val suggestedRounds: Int,
+    val isHiitRecommended: Boolean,
+    val badgeTag: String
+)
+
+data class AchievementBadge(
+    val id: String,
+    val titleThai: String,
+    val descriptionThai: String,
+    val iconKey: String,
+    val unlocked: Boolean,
+    val progressFraction: Float,
+    val progressLabel: String
+)
+
+data class AthleteProgression(
+    val level: Int,
+    val rankTitleThai: String,
+    val totalXp: Int,
+    val xpIntoLevel: Int,
+    val xpNeededForNextLevel: Int,
+    val levelProgressFraction: Float,
+    val unlockedCount: Int,
+    val badges: List<AchievementBadge>
 )
 
 object MoveAnalyticsEngine {
@@ -131,7 +164,7 @@ object MoveAnalyticsEngine {
                 ageMs <= 44L * 3600L * 1000L -> 0.58
                 else -> 0.25
             }
-            val durationLoad = (session.durationSeconds / 1800.0).coerceIn(0.4, 2.0) // 30m = 1.0 unit
+            val durationLoad = (session.durationSeconds / 1800.0).coerceIn(0.15, 2.0) // Flexible session duration load
             val weights = sportMuscleWeights[session.sport].orEmpty()
 
             for ((muscle, w) in weights) {
@@ -204,6 +237,163 @@ object MoveAnalyticsEngine {
             targetTotalMeters = best.distanceMeters,
             targetTotalReps = best.repsCount,
             targetTotalCalories = best.caloriesBurned
+        )
+    }
+
+    fun buildAdaptiveDailyPlan(
+        report: MuscleRecoveryReport,
+        workouts: List<WorkoutSession>
+    ): AdaptiveDailyPlan {
+        val sport = report.recommendedSport
+        return when {
+            report.overallReadinessPercent >= 85 -> AdaptiveDailyPlan(
+                titleThai = "HIIT & Circuit เผาผลาญเต็มพิกัด (${sport.thaiName})",
+                subtitleThai = "ความพร้อมกล้ามเนื้อ ${report.overallReadinessPercent}% — ลุยรอบเร็ว 30/15 วิ หรือจับเวลาอิสระได้ทันที",
+                suggestedSport = if (workouts.isEmpty()) SportType.GENERAL else sport,
+                suggestedWorkSec = 30,
+                suggestedRestSec = 15,
+                suggestedRounds = 4,
+                isHiitRecommended = true,
+                badgeTag = "ฟิตเต็มร้อย"
+            )
+            report.overallReadinessPercent >= 62 -> AdaptiveDailyPlan(
+                titleThai = "โฟกัสกล้ามเนื้อฟื้นตัว: ${sport.thaiName}",
+                subtitleThai = report.recommendationReason,
+                suggestedSport = sport,
+                suggestedWorkSec = 40,
+                suggestedRestSec = 20,
+                suggestedRounds = 4,
+                isHiitRecommended = sport == SportType.GENERAL || sport == SportType.JUMP_ROPE,
+                badgeTag = "สมดุลกล้ามเนื้อ"
+            )
+            else -> AdaptiveDailyPlan(
+                titleThai = "Active Recovery: ${SportType.WALKING.thaiName}เบาๆ",
+                subtitleThai = "กล้ามเนื้อเพิ่งผ่านงานหนัก แนะนำเคลื่อนไหวเบาๆ แบบไม่เร่งเพื่อเร่งการฟื้นตัว",
+                suggestedSport = SportType.WALKING,
+                suggestedWorkSec = 0,
+                suggestedRestSec = 0,
+                suggestedRounds = 0,
+                isHiitRecommended = false,
+                badgeTag = "โหมดฟื้นฟู"
+            )
+        }
+    }
+
+    fun buildAthleteProgression(
+        workouts: List<WorkoutSession>,
+        streak: StreakStatus
+    ): AthleteProgression {
+        val totalMinutes = workouts.sumOf { it.durationSeconds } / 60
+        val totalCalories = workouts.sumOf { it.caloriesBurned }
+        val totalReps = workouts.sumOf { it.repsCount }
+        val totalDistanceMeters = workouts.sumOf { it.distanceMeters }
+        val bestFormScore = workouts.maxOfOrNull { it.avgFormScore } ?: 0
+        val hiitCount = workouts.count { it.workoutSubType.contains("HIIT", ignoreCase = true) || it.workoutSubType.contains("CIRCUIT", ignoreCase = true) }
+        val cameraWorkoutCount = workouts.count { it.mode.name == "CAMERA_AI" }
+
+        val totalXp = (workouts.size * 35) +
+            (totalCalories / 2) +
+            (totalMinutes * 4) +
+            (streak.longestStreak * 40) +
+            (totalReps / 5)
+
+        val xpPerLevel = 250
+        val level = (totalXp / xpPerLevel) + 1
+        val xpIntoLevel = totalXp % xpPerLevel
+        val progress = (xpIntoLevel.toFloat() / xpPerLevel.toFloat()).coerceIn(0f, 1f)
+
+        val rankTitle = when {
+            level >= 15 -> "ตำนานสายฟิต MOVE"
+            level >= 10 -> "นักกีฬาระดับโปร"
+            level >= 6 -> "นักสู้สายอึด"
+            level >= 3 -> "สายแอคทีฟตัวจริง"
+            else -> "ผู้เริ่มต้น MOVE"
+        }
+
+        val badges = listOf(
+            AchievementBadge(
+                id = "first_step",
+                titleThai = "ก้าวแรกสู่เส้นชัย",
+                descriptionThai = "บันทึกการออกกำลังกายครั้งแรกสำเร็จ",
+                iconKey = "FIRST",
+                unlocked = workouts.isNotEmpty(),
+                progressFraction = if (workouts.isNotEmpty()) 1f else 0f,
+                progressLabel = "${workouts.size.coerceAtMost(1)}/1"
+            ),
+            AchievementBadge(
+                id = "streak_3",
+                titleThai = "สายฟิต 3 วันติด",
+                descriptionThai = "ออกกำลังกายต่อเนื่อง 3 วัน",
+                iconKey = "STREAK",
+                unlocked = streak.longestStreak >= 3,
+                progressFraction = (streak.longestStreak / 3f).coerceIn(0f, 1f),
+                progressLabel = "${streak.longestStreak.coerceAtMost(3)}/3 วัน"
+            ),
+            AchievementBadge(
+                id = "streak_7",
+                titleThai = "สัปดาห์เหล็ก 7 วัน",
+                descriptionThai = "รักษาความต่อเนื่องครบ 7 วัน",
+                iconKey = "STREAK7",
+                unlocked = streak.longestStreak >= 7,
+                progressFraction = (streak.longestStreak / 7f).coerceIn(0f, 1f),
+                progressLabel = "${streak.longestStreak.coerceAtMost(7)}/7 วัน"
+            ),
+            AchievementBadge(
+                id = "kcal_500",
+                titleThai = "นักเผาผลาญ 500 kcal",
+                descriptionThai = "เผาผลาญสะสมครบ 500 กิโลแคลอรี",
+                iconKey = "BURN",
+                unlocked = totalCalories >= 500,
+                progressFraction = (totalCalories / 500f).coerceIn(0f, 1f),
+                progressLabel = "${totalCalories.coerceAtMost(500)}/500"
+            ),
+            AchievementBadge(
+                id = "ai_form_90",
+                titleThai = "ฟอร์มเทพ AI 90%+",
+                descriptionThai = "ได้คะแนนฟอร์มเฉลี่ยจากกล้อง AI อย่างน้อย 90%",
+                iconKey = "AI_FORM",
+                unlocked = bestFormScore >= 90,
+                progressFraction = (bestFormScore / 90f).coerceIn(0f, 1f),
+                progressLabel = "$bestFormScore/90%"
+            ),
+            AchievementBadge(
+                id = "distance_3km",
+                titleThai = "นักวิ่งระยะ 3 กม.",
+                descriptionThai = "สะสมระยะทางเดิน/วิ่ง/ปั่น ครบ 3 กิโลเมตร",
+                iconKey = "DISTANCE",
+                unlocked = totalDistanceMeters >= 3000,
+                progressFraction = (totalDistanceMeters / 3000f).coerceIn(0f, 1f),
+                progressLabel = "${String.format(Locale.US, "%.1f", (totalDistanceMeters / 1000f).coerceAtMost(3f))}/3.0 กม."
+            ),
+            AchievementBadge(
+                id = "rep_master_50",
+                titleThai = "จอมพลัง 50 ครั้ง",
+                descriptionThai = "สะสมจำนวนครั้ง/กระโดดครบ 50 ครั้ง",
+                iconKey = "REPS",
+                unlocked = totalReps >= 50,
+                progressFraction = (totalReps / 50f).coerceIn(0f, 1f),
+                progressLabel = "${totalReps.coerceAtMost(50)}/50"
+            ),
+            AchievementBadge(
+                id = "hiit_challenger",
+                titleThai = "สาย HIIT & AI",
+                descriptionThai = "ฝึกโหมด HIIT หรือกล้อง AI ครบ 2 ครั้ง",
+                iconKey = "HIIT",
+                unlocked = (hiitCount + cameraWorkoutCount) >= 2,
+                progressFraction = ((hiitCount + cameraWorkoutCount) / 2f).coerceIn(0f, 1f),
+                progressLabel = "${(hiitCount + cameraWorkoutCount).coerceAtMost(2)}/2"
+            )
+        )
+
+        return AthleteProgression(
+            level = level,
+            rankTitleThai = rankTitle,
+            totalXp = totalXp,
+            xpIntoLevel = xpIntoLevel,
+            xpNeededForNextLevel = xpPerLevel,
+            levelProgressFraction = progress,
+            unlockedCount = badges.count { it.unlocked },
+            badges = badges
         )
     }
 }

@@ -2,6 +2,7 @@ package com.example.data.model
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import kotlinx.serialization.Serializable
 
 enum class TrackingMode(val thaiLabel: String, val shortLabel: String) {
     CAMERA_AI("ตรวจจับด้วยกล้อง AI", "กล้อง AI"),
@@ -14,12 +15,21 @@ enum class TrackingMode(val thaiLabel: String, val shortLabel: String) {
     }
 }
 
+@Serializable
+data class RoutePoint(
+    val lat: Double,
+    val lng: Double,
+    val speedKmh: Float = 0f,
+    val elapsedSec: Int = 0
+)
+
+@Serializable
 @Entity(tableName = "user_profile")
 data class UserProfile(
     @PrimaryKey val id: String = LOCAL_PROFILE_ID,
     val userId: String = LOCAL_PROFILE_ID,
     val displayName: String = "นักกีฬา MOVE",
-    val dailyGoalMinutes: Int = 30,
+    val dailyGoalMinutes: Int = 0, // 0 = เวลาอิสระ (Free Mode / ไม่จำกัดเวลา)
     val weightKg: Float = 65f,
     val currentStreak: Int = 0,
     val longestStreak: Int = 0,
@@ -31,6 +41,7 @@ data class UserProfile(
     }
 }
 
+@Serializable
 @Entity(tableName = "workouts")
 data class WorkoutSession(
     @PrimaryKey val id: String = "",
@@ -45,7 +56,11 @@ data class WorkoutSession(
     val motionActiveSeconds: Int = 0,
     val activityDate: String = "",
     val startedAtMillis: Long = 0L,
-    val endedAtMillis: Long = 0L
+    val endedAtMillis: Long = 0L,
+    val avgFormScore: Int = 0,
+    val avgSymmetryPercent: Int = 100,
+    val routeJson: String = "",
+    val workoutSubType: String = "FREE"
 ) {
     val sport: SportType
         get() = SportType.fromNameSafe(sportType)

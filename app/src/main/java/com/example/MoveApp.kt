@@ -79,6 +79,7 @@ import com.example.ui.theme.MoveTheme
 import com.example.ui.viewmodel.DashboardData
 import com.example.ui.viewmodel.DashboardViewModel
 import com.example.ui.viewmodel.SettingsViewModel
+import com.example.ui.viewmodel.WorkoutTimerStyle
 import com.example.ui.viewmodel.WorkoutViewModel
 import kotlinx.serialization.Serializable
 
@@ -105,7 +106,11 @@ data class StretchingRoute(
 data class WorkoutRoute(
     val sportName: String,
     val trackingModeName: String = "",
-    val resumeDraft: Boolean = false
+    val resumeDraft: Boolean = false,
+    val isHiit: Boolean = false,
+    val hiitWorkSec: Int = 30,
+    val hiitRestSec: Int = 15,
+    val hiitRounds: Int = 4
 )
 
 private enum class TopLevelTab(
@@ -354,7 +359,20 @@ fun AppNavigation() {
                                         )
                                     },
                                     onDiscardDraft = dashboardViewModel::discardPendingDraft,
-                                    onViewHistory = { navigateTopLevel(TopLevelTab.HISTORY) }
+                                    onViewHistory = { navigateTopLevel(TopLevelTab.HISTORY) },
+                                    onStartAdaptivePlan = { plan ->
+                                        navController.navigate(
+                                            WorkoutRoute(
+                                                sportName = plan.suggestedSport.name,
+                                                trackingModeName = plan.suggestedSport.defaultTrackingMode.name,
+                                                resumeDraft = false,
+                                                isHiit = plan.isHiitRecommended,
+                                                hiitWorkSec = plan.suggestedWorkSec.coerceAtLeast(10),
+                                                hiitRestSec = plan.suggestedRestSec.coerceAtLeast(5),
+                                                hiitRounds = plan.suggestedRounds.coerceAtLeast(1)
+                                            )
+                                        )
+                                    }
                                 )
                             }
                         }
@@ -447,7 +465,14 @@ fun AppNavigation() {
                                         .takeIf { it.isNotBlank() }
                                         ?.let { TrackingMode.fromNameSafe(it) }
                                         ?: sport.defaultTrackingMode
-                                    workoutViewModel.startFreshSession(sport, selectedMode)
+                                    workoutViewModel.startFreshSession(
+                                        sportType = sport,
+                                        initialMode = selectedMode,
+                                        timerStyle = if (routeArgs.isHiit) WorkoutTimerStyle.HIIT else WorkoutTimerStyle.FREE,
+                                        hiitWorkSec = routeArgs.hiitWorkSec,
+                                        hiitRestSec = routeArgs.hiitRestSec,
+                                        hiitRounds = routeArgs.hiitRounds
+                                    )
                                 }
                             }
 
