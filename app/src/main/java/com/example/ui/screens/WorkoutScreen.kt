@@ -21,6 +21,7 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -45,6 +46,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
+import androidx.compose.material.icons.rounded.AccessibilityNew
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Balance
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Cameraswitch
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -90,6 +95,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -147,7 +153,8 @@ private fun checkActivityPermission(context: Context): Boolean =
 fun WorkoutScreen(
     viewModel: WorkoutViewModel,
     appSettings: AppSettings,
-    onExitToDashboard: () -> Unit
+    onExitToDashboard: () -> Unit,
+    onStartCoolDown: (SportType) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -400,6 +407,7 @@ fun WorkoutScreen(
     if (uiState.saveOutcome != null && uiState.savedSession != null) {
         PostWorkoutSummaryScreen(
             uiState = uiState,
+            onStartCoolDown = { onStartCoolDown(uiState.savedSession!!.sport) },
             onDone = onExitToDashboard
         )
         return
@@ -660,80 +668,178 @@ private fun TrackingViewportCard(
                     )
 
                     // Top status pill + lens toggle
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(999.dp),
-                            color = when {
-                                !uiState.isRunning -> Color.Black.copy(alpha = 0.7f)
-                                uiState.poseSnapshot.isBodyVisible && uiState.isCurrentlyMoving ->
-                                    EmeraldVibrant.copy(alpha = 0.92f)
-                                uiState.poseSnapshot.isBodyVisible ->
-                                    ForestGreen.copy(alpha = 0.88f)
-                                else -> Color.Black.copy(alpha = 0.72f)
-                            }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = when {
-                                    !uiState.isRunning -> "หยุดชั่วคราว"
-                                    else -> uiState.poseSnapshot.postureHint
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = when {
+                                    !uiState.isRunning -> Color.Black.copy(alpha = 0.7f)
+                                    uiState.poseSnapshot.isBodyVisible && uiState.isCurrentlyMoving ->
+                                        EmeraldVibrant.copy(alpha = 0.92f)
+                                    uiState.poseSnapshot.isBodyVisible ->
+                                        ForestGreen.copy(alpha = 0.88f)
+                                    else -> Color.Black.copy(alpha = 0.72f)
                                 },
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                            )
+                                modifier = Modifier.weight(1f, fill = false)
+                            ) {
+                                Text(
+                                    text = when {
+                                        !uiState.isRunning -> "หยุดชั่วคราว"
+                                        else -> uiState.poseSnapshot.postureHint
+                                    },
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            IconButton(
+                                onClick = onToggleCameraLens,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.55f))
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Cameraswitch,
+                                    contentDescription = "สลับกล้องหน้า-หลัง",
+                                    tint = Color.White
+                                )
+                            }
                         }
 
-                        IconButton(
-                            onClick = onToggleCameraLens,
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.55f))
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Cameraswitch,
-                                contentDescription = "สลับกล้องหน้า-หลัง",
-                                tint = Color.White
-                            )
+                        // AI Form % & Symmetry % Live Badges
+                        androidx.compose.animation.AnimatedVisibility(visible = uiState.poseSnapshot.isBodyVisible) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = Color.Black.copy(alpha = 0.58f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.AutoAwesome,
+                                            contentDescription = null,
+                                            tint = MintBright,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = "ฟอร์ม ${uiState.formScorePercent}%",
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = Color.Black.copy(alpha = 0.58f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Balance,
+                                            contentDescription = null,
+                                            tint = if (uiState.symmetryPercent >= 85) MintBright else AmberWarm,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = "สมดุล ${uiState.symmetryPercent}%",
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    // No body / idle guidance alert
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = uiState.showAdjustCameraTip && uiState.isRunning,
+                    // Bottom alerts (Fatigue Guard or No-body/idle tip)
+                    Column(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(12.dp)
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = AmberWarm.copy(alpha = 0.95f),
-                            modifier = Modifier.fillMaxWidth()
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = uiState.fatigueWarning && uiState.isRunning && uiState.fatigueHint.isNotBlank()
                         ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = Color(0xFFB45309).copy(alpha = 0.94f),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.WarningAmber,
-                                    contentDescription = null,
-                                    tint = Color.White
-                                )
-                                Text(
-                                    text = if (!uiState.poseSnapshot.isBodyVisible) {
-                                        "ไม่พบตัวในกล้อง กรุณาตั้งมือถือให้เห็นร่างกายชัดเจน"
-                                    } else {
-                                        "พบตัวแล้วแต่ยังนิ่งอยู่ — ขยับร่างกายเพื่อเริ่มนับและเผาผลาญแคลอรี"
-                                    },
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.labelLarge
-                                )
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Bolt,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Text(
+                                        text = "Fatigue Guard: ${uiState.fatigueHint}",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = uiState.showAdjustCameraTip && uiState.isRunning
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = AmberWarm.copy(alpha = 0.95f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.WarningAmber,
+                                        contentDescription = null,
+                                        tint = Color.White
+                                    )
+                                    Text(
+                                        text = if (!uiState.poseSnapshot.isBodyVisible) {
+                                            "ไม่พบตัวในกล้อง กรุณาตั้งมือถือให้เห็นร่างกายชัดเจน"
+                                        } else {
+                                            "พบตัวแล้วแต่ยังนิ่งอยู่ — ขยับร่างกายเพื่อเริ่มนับและเผาผลาญแคลอรี"
+                                        },
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
                             }
                         }
                     }
@@ -1101,6 +1207,8 @@ private fun WorkoutMetricsAndControls(
     Card(
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -1141,6 +1249,43 @@ private fun WorkoutMetricsAndControls(
                 color = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
+        }
+    }
+
+    // Ghost Pacer Duel HUD when user has a past best workout for this sport
+    if (uiState.ghostRival.hasRival) {
+        GhostPacerDuelCard(uiState = uiState)
+    }
+
+    // Symmetry advice chip when Camera AI sees posture imbalance
+    if (uiState.trackingMode == TrackingMode.CAMERA_AI &&
+        uiState.poseSnapshot.isBodyVisible &&
+        uiState.symmetryHint.isNotBlank() &&
+        uiState.symmetryPercent < 86
+    ) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Balance,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "AI โค้ช: ${uiState.symmetryHint}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
     }
 
@@ -1267,8 +1412,106 @@ private fun WorkoutMetricsAndControls(
 }
 
 @Composable
+private fun GhostPacerDuelCard(uiState: WorkoutUiState) {
+    val ghostAtNow = uiState.ghostRival.expectedProgressAt(uiState.elapsedSeconds)
+    val sport = uiState.sportType
+
+    val (currentVal, ghostVal, unitLabel) = when {
+        sport.supportsDistance && uiState.ghostRival.targetTotalMeters > 0 ->
+            Triple(uiState.distanceMeters, ghostAtNow.meters, "ม.")
+        sport.supportsReps && uiState.ghostRival.targetTotalReps > 0 ->
+            Triple(uiState.repsCount, ghostAtNow.reps, "ครั้ง")
+        sport.supportsSteps && uiState.ghostRival.targetTotalSteps > 0 ->
+            Triple(uiState.steps, ghostAtNow.steps, "ก้าว")
+        else ->
+            Triple(uiState.caloriesBurned, ghostAtNow.calories, "kcal")
+    }
+
+    val diff = currentVal - ghostVal
+    val isAhead = diff >= 0
+    val duelRatio = when {
+        ghostVal <= 0 && currentVal <= 0 -> 0.5f
+        ghostVal <= 0 -> 0.85f
+        else -> (0.5f + ((diff.toFloat() / maxOf(ghostVal, 10)) * 0.45f)).coerceIn(0.08f, 0.96f)
+    }
+
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("ghost_pacer_card")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(ForestGreenDeep, ForestGreen)
+                    )
+                )
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Bolt,
+                        contentDescription = null,
+                        tint = MintBright,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Ghost Pacer • แข่งกับเงาสถิติสูงสุด (${uiState.ghostRival.rivalDateLabel})",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isAhead) "คุณนำหน้าเงาอยู่ +$diff $unitLabel" else "ตามหลังเงา ${kotlin.math.abs(diff)} $unitLabel",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (isAhead) MintBright else AmberWarm,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "เงาตอนนี้: $ghostVal $unitLabel",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.78f)
+                )
+            }
+
+            LinearProgressIndicator(
+                progress = { duelRatio },
+                color = if (isAhead) MintBright else AmberWarm,
+                trackColor = Color.White.copy(alpha = 0.2f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(999.dp))
+            )
+        }
+    }
+}
+
+@Composable
 private fun PostWorkoutSummaryScreen(
     uiState: WorkoutUiState,
+    onStartCoolDown: () -> Unit,
     onDone: () -> Unit
 ) {
     val session = uiState.savedSession!!
@@ -1305,7 +1548,8 @@ private fun PostWorkoutSummaryScreen(
                 Text(
                     text = "บันทึกกิจกรรมสำเร็จ!",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
                 )
 
                 Text(
@@ -1342,11 +1586,29 @@ private fun PostWorkoutSummaryScreen(
                 )
 
                 Button(
+                    onClick = onStartCoolDown,
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldVibrant),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .testTag("post_workout_cooldown_button")
+                ) {
+                    Icon(Icons.Rounded.AccessibilityNew, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "ยืดคลายกล้ามเนื้อหลังเล่น (Cool-Down)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                OutlinedButton(
                     onClick = onDone,
                     shape = RoundedCornerShape(18.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp)
+                        .height(52.dp)
                         .testTag("post_workout_done_button")
                 ) {
                     Text("กลับหน้าหลัก", style = MaterialTheme.typography.titleMedium)

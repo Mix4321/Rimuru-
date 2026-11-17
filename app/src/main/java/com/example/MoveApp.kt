@@ -97,7 +97,8 @@ data object SettingsRoute
 @Serializable
 data class StretchingRoute(
     val sportName: String,
-    val trackingModeName: String = ""
+    val trackingModeName: String = "",
+    val isCoolDown: Boolean = false
 )
 
 @Serializable
@@ -386,16 +387,21 @@ fun AppNavigation() {
                             StretchingScreen(
                                 sportType = sport,
                                 appSettings = appSettings,
+                                isCoolDown = routeArgs.isCoolDown,
                                 onBack = { navController.popBackStack() },
                                 onStartWorkoutNow = {
-                                    navController.navigate(
-                                        WorkoutRoute(
-                                            sportName = sport.name,
-                                            trackingModeName = routeArgs.trackingModeName,
-                                            resumeDraft = false
-                                        )
-                                    ) {
-                                        popUpTo<StretchingRoute> { inclusive = true }
+                                    if (routeArgs.isCoolDown) {
+                                        navController.popBackStack(DashboardRoute, inclusive = false)
+                                    } else {
+                                        navController.navigate(
+                                            WorkoutRoute(
+                                                sportName = sport.name,
+                                                trackingModeName = routeArgs.trackingModeName,
+                                                resumeDraft = false
+                                            )
+                                        ) {
+                                            popUpTo<StretchingRoute> { inclusive = true }
+                                        }
                                     }
                                 }
                             )
@@ -450,6 +456,17 @@ fun AppNavigation() {
                                 appSettings = appSettings,
                                 onExitToDashboard = {
                                     navController.popBackStack(DashboardRoute, inclusive = false)
+                                },
+                                onStartCoolDown = { completedSport ->
+                                    navController.navigate(
+                                        StretchingRoute(
+                                            sportName = completedSport.name,
+                                            trackingModeName = "",
+                                            isCoolDown = true
+                                        )
+                                    ) {
+                                        popUpTo<WorkoutRoute> { inclusive = true }
+                                    }
                                 }
                             )
                         }

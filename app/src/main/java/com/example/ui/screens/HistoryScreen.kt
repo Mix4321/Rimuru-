@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +52,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -64,6 +67,8 @@ import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
+import com.example.ui.theme.ForestGreenDeep
+import com.example.ui.theme.MintBright
 import com.example.ui.viewmodel.DashboardData
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -106,19 +111,64 @@ fun HistoryScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            Column {
-                Text(
-                    text = "ประวัติและสถิติกิจกรรม",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = "รวมทั้งหมด ${data.workouts.size} กิจกรรม • ${
-                        DateStreakUtils.formatMinutesThai(data.workouts.sumOf { it.durationSeconds })
-                    }",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Card(
+                shape = RoundedCornerShape(26.dp),
+                colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(ForestGreenDeep, ForestGreen)
+                            )
+                        )
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "ประวัติและสถิติกิจกรรม",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color.White.copy(alpha = 0.12f),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("กิจกรรมทั้งหมด", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.72f))
+                                Text("${data.workouts.size} ครั้ง", style = MaterialTheme.typography.titleMedium, color = MintBright, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color.White.copy(alpha = 0.12f),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("เวลารวม", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.72f))
+                                Text(DateStreakUtils.formatMinutesThai(data.workouts.sumOf { it.durationSeconds }), style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color.White.copy(alpha = 0.12f),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("เผาผลาญรวม", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.72f))
+                                Text("${data.workouts.sumOf { it.caloriesBurned }} kcal", style = MaterialTheme.typography.titleMedium, color = AmberWarm, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -248,9 +298,10 @@ private fun WorkoutHistoryRow(
     onClick: () -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
@@ -265,13 +316,17 @@ private fun WorkoutHistoryRow(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(EmeraldVibrant, ForestGreen)
+                        )
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = session.sport.icon,
                     contentDescription = session.sport.thaiName,
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = Color.White
                 )
             }
 

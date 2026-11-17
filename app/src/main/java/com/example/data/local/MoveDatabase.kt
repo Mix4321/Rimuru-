@@ -90,6 +90,8 @@ class MoveRepository(private val dao: MoveDao) {
 
     suspend fun getUserProfileOnce(): UserProfile = dao.getUserProfileOnce() ?: UserProfile()
 
+    suspend fun getAllWorkoutsOnce(): List<WorkoutSession> = dao.getAllWorkoutsOnce()
+
     suspend fun ensureUserProfile(): Result<Unit> = runCatching {
         if (dao.getUserProfileOnce() == null) {
             dao.upsertUserProfile(UserProfile())

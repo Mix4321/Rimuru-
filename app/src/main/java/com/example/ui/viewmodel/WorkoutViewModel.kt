@@ -14,6 +14,8 @@ import com.example.data.model.TrackingMode
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutSession
 import com.example.domain.DateStreakUtils
+import com.example.domain.GhostRivalSnapshot
+import com.example.domain.MoveAnalyticsEngine
 import com.example.sensors.GpsTrackingSnapshot
 import com.example.sensors.SensorMotionSnapshot
 import kotlinx.coroutines.Job
@@ -57,6 +59,12 @@ data class WorkoutUiState(
     val isCurrentlyMoving: Boolean = false,
     val currentIntensity: Float = 0f,
     val showAdjustCameraTip: Boolean = false,
+    val ghostRival: GhostRivalSnapshot = GhostRivalSnapshot(),
+    val symmetryPercent: Int = 100,
+    val formScorePercent: Int = 0,
+    val symmetryHint: String = "",
+    val fatigueWarning: Boolean = false,
+    val fatigueHint: String = "",
     val manualEffort: ManualEffortLevel = ManualEffortLevel.MODERATE,
     val isSaving: Boolean = false,
     val saveOutcome: SaveWorkoutOutcome? = null,
@@ -110,7 +118,7 @@ class WorkoutViewModel(
             hasStartedOnce = false,
             trackingMode = initialMode
         )
-        loadProfileWeight()
+        loadProfileAndGhostRival(sportType)
     }
 
     fun restoreFromDraft(draft: ActiveWorkoutDraft) {
@@ -132,14 +140,19 @@ class WorkoutViewModel(
             hasStartedOnce = true,
             trackingMode = draft.trackingMode
         )
-        loadProfileWeight()
+        loadProfileAndGhostRival(draft.sportType)
     }
 
-    private fun loadProfileWeight() {
+    private fun loadProfileAndGhostRival(sportType: SportType) {
         viewModelScope.launch {
             runCatching { repository.getUserProfileOnce() }
                 .onSuccess { profile ->
                     _uiState.update { it.copy(userWeightKg = profile.weightKg.coerceIn(25f, 250f)) }
+                }
+            runCatching { repository.getAllWorkoutsOnce() }
+                .onSuccess { workouts ->
+                    val rival = MoveAnalyticsEngine.findBestGhostRival(workouts, sportType)
+                    _uiState.update { it.copy(ghostRival = rival) }
                 }
         }
     }
@@ -241,6 +254,11 @@ class WorkoutViewModel(
                 poseSnapshot = snapshot,
                 isCurrentlyMoving = if (state.trackingMode == TrackingMode.CAMERA_AI) snapshot.isMoving else state.isCurrentlyMoving,
                 currentIntensity = if (state.trackingMode == TrackingMode.CAMERA_AI) snapshot.motionIntensity else state.currentIntensity,
+                symmetryPercent = if (state.trackingMode == TrackingMode.CAMERA_AI && snapshot.isBodyVisible) snapshot.symmetryPercent else state.symmetryPercent,
+                formScorePercent = if (state.trackingMode == TrackingMode.CAMERA_AI && snapshot.isBodyVisible) snapshot.formScorePercent else state.formScorePercent,
+                symmetryHint = if (state.trackingMode == TrackingMode.CAMERA_AI) snapshot.symmetryHint else "",
+                fatigueWarning = if (state.trackingMode == TrackingMode.CAMERA_AI) snapshot.fatigueWarning else false,
+                fatigueHint = if (state.trackingMode == TrackingMode.CAMERA_AI) snapshot.fatigueHint else "",
                 steps = state.steps + addSteps,
                 repsCount = state.repsCount + addReps,
                 distanceMeters = state.distanceMeters + addMeters,

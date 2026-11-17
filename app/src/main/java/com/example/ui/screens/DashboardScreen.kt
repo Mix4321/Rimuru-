@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.LocalFireDepartment
@@ -31,11 +33,9 @@ import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -51,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -64,10 +65,12 @@ import com.example.domain.DateStreakUtils
 import com.example.ui.components.DailyGoalRing
 import com.example.ui.components.GoalSettingDialog
 import com.example.ui.components.MetricTile
+import com.example.ui.components.MuscleRecoveryHeatmapCard
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
 import com.example.ui.theme.ForestGreenDeep
+import com.example.ui.theme.ForestGreenMedium
 import com.example.ui.theme.MintBright
 import com.example.ui.viewmodel.DashboardData
 
@@ -153,34 +156,155 @@ fun DashboardScreen(
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Top Greeting Header
+            // Atmospheric Athletic Hero Greeting Header
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Card(
+                    shape = RoundedCornerShape(28.dp),
+                    colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "สวัสดี, ${data.profile.displayName}",
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Text(
-                            text = "พร้อมเคลื่อนไหวเพื่อสุขภาพที่ดีขึ้นวันนี้หรือยัง?",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    IconButton(
-                        onClick = { showProfileDialog = true },
-                        modifier = Modifier.testTag("edit_profile_button")
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(ForestGreenDeep, ForestGreen, ForestGreenMedium)
+                                )
+                            )
+                            .padding(20.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Person,
-                            contentDescription = "แก้ไขโปรไฟล์",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "MOVE • Smart Fitness",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MintBright,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "สวัสดี, ${data.profile.displayName}",
+                                        style = MaterialTheme.typography.headlineMedium,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "พร้อมเคลื่อนไหวเพื่อสุขภาพที่ดีขึ้นวันนี้หรือยัง?",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.White.copy(alpha = 0.8f)
+                                    )
+                                }
+
+                                Surface(
+                                    shape = CircleShape,
+                                    color = Color.White.copy(alpha = 0.14f),
+                                    border = BorderStroke(1.dp, MintBright.copy(alpha = 0.35f)),
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .clickable { showProfileDialog = true }
+                                        .testTag("edit_profile_button")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Person,
+                                            contentDescription = "แก้ไขโปรไฟล์",
+                                            tint = MintBright
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Integrated Streak + Readiness Summary Pill Row inside Hero
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = Color.White.copy(alpha = 0.12f),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.LocalFireDepartment,
+                                            contentDescription = "Streak",
+                                            tint = if (data.streak.hasCompletedToday) MintBright else AmberWarm,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                        Column {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Streak ${data.streak.currentStreak} วัน",
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    color = Color.White,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.testTag("streak_count_text")
+                                                )
+                                                if (data.streak.hasCompletedToday) {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.CheckCircle,
+                                                        contentDescription = null,
+                                                        tint = MintBright,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                }
+                                            }
+                                            Text(
+                                                text = if (data.streak.longestStreak > 0) "สูงสุด ${data.streak.longestStreak} วัน" else "เริ่มสะสมสถิติ",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color.White.copy(alpha = 0.72f)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = Color.White.copy(alpha = 0.12f),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.AutoAwesome,
+                                            contentDescription = null,
+                                            tint = MintBright,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                        Column {
+                                            Text(
+                                                text = "พร้อม ${data.muscleRecovery.overallReadinessPercent}%",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = "แนะนำ: ${data.muscleRecovery.recommendedSport.thaiName}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MintBright
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -196,7 +320,7 @@ fun DashboardScreen(
                 }
             }
 
-            // Adaptive Hero Section: Side-by-side on Tablet, stacked on Phone
+            // Adaptive Main Section: Side-by-side on Tablet, stacked on Phone
             if (isWide) {
                 item {
                     Row(
@@ -206,21 +330,21 @@ fun DashboardScreen(
                         DailyGoalCard(
                             data = data,
                             onEditGoal = { showGoalDialog = true },
-                            modifier = Modifier.weight(1.15f)
+                            modifier = Modifier.weight(1.1f)
                         )
                         Column(
-                            modifier = Modifier.weight(0.85f),
+                            modifier = Modifier.weight(0.9f),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
-                            StreakCard(data = data)
                             StartExerciseHeroCard(onStartExerciseClick = onStartExerciseClick)
+                            MuscleRecoveryHeatmapCard(
+                                report = data.muscleRecovery,
+                                onStartRecommendedSport = onQuickStartSport
+                            )
                         }
                     }
                 }
             } else {
-                item {
-                    StreakCard(data = data)
-                }
                 item {
                     DailyGoalCard(
                         data = data,
@@ -229,6 +353,12 @@ fun DashboardScreen(
                 }
                 item {
                     StartExerciseHeroCard(onStartExerciseClick = onStartExerciseClick)
+                }
+                item {
+                    MuscleRecoveryHeatmapCard(
+                        report = data.muscleRecovery,
+                        onStartRecommendedSport = onQuickStartSport
+                    )
                 }
             }
 
@@ -248,7 +378,8 @@ fun DashboardScreen(
                     Text(
                         text = "สรุปกิจกรรมวันนี้",
                         style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onBackground
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontWeight = FontWeight.Bold
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -290,7 +421,8 @@ fun DashboardScreen(
                         Text(
                             text = "เริ่มต้นด่วน",
                             style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onBackground
+                            color = MaterialTheme.colorScheme.onBackground,
+                            fontWeight = FontWeight.Bold
                         )
                         TextButton(onClick = onViewHistory) {
                             Text("ดูประวัติทั้งหมด")
@@ -302,112 +434,55 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         listOf(SportType.RUNNING, SportType.WALKING, SportType.JUMP_ROPE).forEach { sport ->
-                            Surface(
-                                shape = RoundedCornerShape(18.dp),
-                                color = MaterialTheme.colorScheme.surface,
-                                tonalElevation = 1.dp,
+                            Card(
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
                                 modifier = Modifier
                                     .weight(1f)
                                     .clickable { onQuickStartSport(sport) }
                                     .testTag("quick_sport_${sport.name}")
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(vertical = 14.dp, horizontal = 10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 16.dp, horizontal = 10.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(40.dp)
+                                            .size(46.dp)
                                             .clip(CircleShape)
-                                            .background(MaterialTheme.colorScheme.primaryContainer),
+                                            .background(
+                                                Brush.linearGradient(
+                                                    colors = listOf(EmeraldVibrant, ForestGreen)
+                                                )
+                                            ),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = sport.icon,
                                             contentDescription = sport.thaiName,
-                                            tint = MaterialTheme.colorScheme.primary
+                                            tint = Color.White
                                         )
                                     }
                                     Text(
                                         text = sport.thaiName,
                                         style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "~${sport.kcalPerMinute.toInt()} kcal/น.",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
                                     )
                                 }
                             }
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StreakCard(data: DashboardData) {
-    Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = ForestGreen),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    Brush.horizontalGradient(
-                        colors = listOf(ForestGreenDeep, ForestGreen)
-                    )
-                )
-                .padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(54.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MintBright.copy(alpha = 0.2f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.LocalFireDepartment,
-                    contentDescription = "Streak",
-                    tint = if (data.streak.hasCompletedToday) MintBright else AmberWarm,
-                    modifier = Modifier.size(30.dp)
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Streak ${data.streak.currentStreak} วัน",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.testTag("streak_count_text")
-                    )
-                    if (data.streak.hasCompletedToday) {
-                        Icon(
-                            imageVector = Icons.Rounded.CheckCircle,
-                            contentDescription = "ผ่านเงื่อนไขวันนี้แล้ว",
-                            tint = MintBright,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-                Text(
-                    text = data.streak.statusMessageThai,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
-                )
-                if (data.streak.longestStreak > 0) {
-                    Text(
-                        text = "สถิติสูงสุด: ${data.streak.longestStreak} วัน",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MintBright
-                    )
                 }
             }
         }
@@ -425,6 +500,7 @@ private fun DailyGoalCard(
         shape = RoundedCornerShape(26.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
@@ -440,7 +516,8 @@ private fun DailyGoalCard(
                     Text(
                         text = "เป้าหมายการออกกำลังกายวันนี้",
                         style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Bold
                     )
                     Text(
                         text = "เป้าหมาย ${goal.goalMinutes} นาที",
@@ -501,7 +578,7 @@ private fun DailyGoalCard(
 @Composable
 private fun GoalStatRow(label: String, value: String) {
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -523,29 +600,53 @@ private fun GoalStatRow(label: String, value: String) {
 
 @Composable
 private fun StartExerciseHeroCard(onStartExerciseClick: () -> Unit) {
-    Button(
-        onClick = onStartExerciseClick,
-        shape = RoundedCornerShape(22.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = EmeraldVibrant,
-            contentColor = MaterialTheme.colorScheme.onPrimary
-        ),
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 4.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .height(64.dp)
+            .height(68.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(onClick = onStartExerciseClick)
             .testTag("start_workout_cta")
     ) {
-        Icon(
-            imageVector = Icons.Rounded.PlayArrow,
-            contentDescription = null,
-            modifier = Modifier.size(28.dp)
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = "เริ่มออกกำลังกาย",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold
-        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(ForestGreen, EmeraldVibrant)
+                    )
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "เริ่มออกกำลังกายเลย",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }
 

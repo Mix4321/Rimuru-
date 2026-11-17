@@ -1,9 +1,24 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.SystemClock
+import android.speech.tts.TextToSpeech
+import android.util.Log
+import android.util.Size
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -31,6 +46,9 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.AccessibilityNew
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Cameraswitch
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Info
@@ -64,20 +82,31 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.camera.PoseOverlayCanvas
+import com.example.camera.StretchFormFeedback
+import com.example.camera.StretchPoseAnalyzer
 import com.example.data.local.AppSettings
+import com.example.data.local.DetectionSensitivity
 import com.example.data.model.SportType
+import com.example.data.model.StretchAnimationType
 import com.example.data.model.StretchExercise
 import com.example.data.model.StretchingCatalog
 import com.example.domain.DateStreakUtils
@@ -85,9 +114,14 @@ import com.example.ui.components.StretchAnimationCanvas
 import com.example.ui.theme.AmberSoft
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.EmeraldVibrant
+import com.example.ui.theme.ForestGreen
 import com.example.ui.theme.ForestGreenDeep
 import com.example.ui.theme.MintBright
 import kotlinx.coroutines.delay
+import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 private val STRETCH_DURATION_PRESETS = listOf(15, 20, 30, 45, 60)
 
@@ -95,6 +129,7 @@ private val STRETCH_DURATION_PRESETS = listOf(15, 20, 30, 45, 60)
 fun StretchingScreen(
     sportType: SportType,
     appSettings: AppSettings,
+    isCoolDown: Boolean = false,
     onBack: () -> Unit,
     onStartWorkoutNow: () -> Unit,
     modifier: Modifier = Modifier
@@ -103,9 +138,24 @@ fun StretchingScreen(
     val focusSummary = remember(sportType) { StretchingCatalog.summaryFocusFor(sportType) }
     val haptic = LocalHapticFeedback.current
     val view = LocalView.current
+    val context = LocalContext.current
 
     val toneGen = remember {
         runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 65) }.getOrNull()
+    }
+
+    var ttsReady by remember { mutableStateOf(false) }
+    val tts = remember(context) {
+        var instance: TextToSpeech? = null
+        instance = runCatching {
+            TextToSpeech(context.applicationContext) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    val res = instance?.setLanguage(Locale("th", "TH"))
+                    ttsReady = res != TextToSpeech.LANG_MISSING_DATA && res != TextToSpeech.LANG_NOT_SUPPORTED
+                }
+            }
+        }.getOrNull()
+        instance
     }
 
     DisposableEffect(appSettings.keepScreenOn) {
@@ -118,6 +168,10 @@ fun StretchingScreen(
     DisposableEffect(Unit) {
         onDispose {
             runCatching { toneGen?.release() }
+            runCatching {
+                tts?.stop()
+                tts?.shutdown()
+            }
         }
     }
 
@@ -131,23 +185,64 @@ fun StretchingScreen(
     var isTimerRunning by remember(sportType) { mutableStateOf(true) }
     var isRoutineCompleted by remember(sportType) { mutableStateOf(false) }
 
+    var useCameraCoach by remember(sportType) { mutableStateOf(false) }
+    var useFrontCamera by remember(sportType) { mutableStateOf(true) }
+    var hasCameraPerm by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var stretchFeedback by remember { mutableStateOf(StretchFormFeedback()) }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasCameraPerm = granted
+        useCameraCoach = granted
+    }
+
     val currentExercise = exercises.getOrElse(currentIndex) { exercises.first() }
     val isSecondHalfOfBilateral = currentExercise.hasLeftRightSides &&
         remainingSeconds <= (secondsPerStretch / 2)
 
-    // Haptic & subtle audio cue when switching to the opposite side halfway through bilateral stretch
+    // Voice / audio guidance on pose switch
+    LaunchedEffect(currentIndex, ttsReady, appSettings.enableStretchBeep) {
+        if (appSettings.enableStretchBeep && ttsReady) {
+            runCatching {
+                tts?.speak(
+                    "ท่าที่ ${currentIndex + 1} ${currentExercise.thaiName}",
+                    TextToSpeech.QUEUE_FLUSH,
+                    null,
+                    "stretch_pose_$currentIndex"
+                )
+            }
+        }
+    }
+
+    // Haptic & subtle audio cue when switching sides halfway through bilateral stretch
     LaunchedEffect(currentIndex, isSecondHalfOfBilateral, isTimerRunning) {
         if (isTimerRunning && currentExercise.hasLeftRightSides && isSecondHalfOfBilateral) {
             if (appSettings.enableHapticFeedback) {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             }
             if (appSettings.enableStretchBeep) {
-                runCatching { toneGen?.startTone(ToneGenerator.TONE_PROP_BEEP, 160) }
+                if (ttsReady) {
+                    runCatching {
+                        tts?.speak(
+                            "สลับอีกข้าง",
+                            TextToSpeech.QUEUE_FLUSH,
+                            null,
+                            "stretch_switch_$currentIndex"
+                        )
+                    }
+                } else {
+                    runCatching { toneGen?.startTone(ToneGenerator.TONE_PROP_BEEP, 160) }
+                }
             }
         }
     }
 
-    // Accurate monotonic countdown loop that advances through every stretch automatically
+    // Accurate monotonic countdown loop
     LaunchedEffect(isTimerRunning, isRoutineCompleted, currentIndex) {
         if (!isTimerRunning || isRoutineCompleted) return@LaunchedEffect
         var lastReal = SystemClock.elapsedRealtime()
@@ -170,7 +265,7 @@ fun StretchingScreen(
                 if (appSettings.enableHapticFeedback) {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 }
-                if (appSettings.enableStretchBeep) {
+                if (appSettings.enableStretchBeep && !ttsReady) {
                     runCatching { toneGen?.startTone(ToneGenerator.TONE_PROP_ACK, 240) }
                 }
                 if (currentIndex < exercises.lastIndex) {
@@ -242,12 +337,20 @@ fun StretchingScreen(
                 }
                 Column {
                     Text(
-                        text = "ยืดกล้ามเนื้อ • ${sportType.thaiName}",
+                        text = if (isCoolDown) {
+                            "คูลดาวน์ฟื้นฟู • ${sportType.thaiName}"
+                        } else {
+                            "ยืดกล้ามเนื้อ • ${sportType.thaiName}"
+                        },
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = focusSummary,
+                        text = if (isCoolDown) {
+                            "ผ่อนคลายกล้ามเนื้อและลดอาการตึงหลังออกกำลังกาย"
+                        } else {
+                            focusSummary
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -258,13 +361,94 @@ fun StretchingScreen(
                 onClick = onStartWorkoutNow,
                 modifier = Modifier.testTag("skip_stretch_button")
             ) {
-                Text("ข้าม", fontWeight = FontWeight.Bold)
+                Text(if (isCoolDown) "เสร็จสิ้น" else "ข้าม", fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.width(4.dp))
                 Icon(
                     imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
-                    contentDescription = "ข้ามไปออกกำลังกาย",
+                    contentDescription = if (isCoolDown) "กลับหน้าหลัก" else "ข้ามไปออกกำลังกาย",
                     modifier = Modifier.size(18.dp)
                 )
+            }
+        }
+
+        // Interactive AI Stretch Camera Coach Toggle Bar
+        if (!isRoutineCompleted) {
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (useCameraCoach) EmeraldVibrant else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                ),
+                tonalElevation = 1.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (useCameraCoach) EmeraldVibrant.copy(alpha = 0.16f)
+                                    else MaterialTheme.colorScheme.primaryContainer
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.CameraAlt,
+                                contentDescription = null,
+                                tint = if (useCameraCoach) EmeraldVibrant else MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "AI กล้องเช็กท่ายืดอัจฉริยะ",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (useCameraCoach) "AI กำลังวิเคราะห์ความถูกต้องของท่ายืดแบบเรียลไทม์" else "เปิดกล้องเพื่อเทียบท่ากับตัวการ์ตูนโค้ช",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    FilterChip(
+                        selected = useCameraCoach,
+                        onClick = {
+                            if (useCameraCoach) {
+                                useCameraCoach = false
+                            } else if (hasCameraPerm) {
+                                useCameraCoach = true
+                            } else {
+                                cameraLauncher.launch(Manifest.permission.CAMERA)
+                            }
+                        },
+                        label = {
+                            Text(
+                                text = if (useCameraCoach) "เปิดอยู่" else "เปิดกล้อง",
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = EmeraldVibrant,
+                            selectedLabelColor = Color.White
+                        ),
+                        modifier = Modifier.testTag("toggle_ai_stretch_coach_button")
+                    )
+                }
             }
         }
 
@@ -272,6 +456,7 @@ fun StretchingScreen(
         AnimatedVisibility(visible = isRoutineCompleted) {
             StretchCompletedHeroCard(
                 sportType = sportType,
+                isCoolDown = isCoolDown,
                 exerciseCount = exercises.size,
                 totalMinutesText = DateStreakUtils.formatDurationClock(exercises.size * secondsPerStretch),
                 onStartWorkoutNow = onStartWorkoutNow,
@@ -285,23 +470,57 @@ fun StretchingScreen(
         }
 
         if (!isRoutineCompleted) {
-            // Animated Stretch Stage Card
+            // Animated Stretch Stage Card (with optional live CameraX + PoseOverlay PiP)
             Card(
                 shape = RoundedCornerShape(26.dp),
                 colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
+                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(290.dp)
+                    .height(if (useCameraCoach && hasCameraPerm) 340.dp else 290.dp)
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    StretchAnimationCanvas(
-                        animationType = currentExercise.animationType,
-                        isPlaying = true,
-                        isLeftSideActive = !isSecondHalfOfBilateral,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    if (useCameraCoach && hasCameraPerm) {
+                        StretchCameraCoachPreview(
+                            stretchType = currentExercise.animationType,
+                            isLeftSideActive = !isSecondHalfOfBilateral,
+                            sensitivity = appSettings.detectionSensitivity,
+                            useFrontCamera = useFrontCamera,
+                            onStretchEvaluated = { stretchFeedback = it },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        PoseOverlayCanvas(
+                            snapshot = stretchFeedback.snapshot,
+                            modifier = Modifier.fillMaxSize()
+                        )
 
-                    // Top Status Row (Pose Index + Side Indicator)
+                        // Picture-in-Picture reference athlete demonstration
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.5.dp, MintBright.copy(alpha = 0.65f)),
+                            color = ForestGreenDeep.copy(alpha = 0.9f),
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 56.dp, end = 12.dp)
+                                .size(width = 104.dp, height = 118.dp)
+                        ) {
+                            StretchAnimationCanvas(
+                                animationType = currentExercise.animationType,
+                                isPlaying = true,
+                                isLeftSideActive = !isSecondHalfOfBilateral,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    } else {
+                        StretchAnimationCanvas(
+                            animationType = currentExercise.animationType,
+                            isPlaying = true,
+                            isLeftSideActive = !isSecondHalfOfBilateral,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    // Top Status Row
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -311,7 +530,7 @@ fun StretchingScreen(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(999.dp),
-                            color = Color.Black.copy(alpha = 0.55f)
+                            color = Color.Black.copy(alpha = 0.6f)
                         ) {
                             Text(
                                 text = "ท่าที่ ${currentIndex + 1} / ${exercises.size}",
@@ -322,54 +541,110 @@ fun StretchingScreen(
                             )
                         }
 
-                        if (currentExercise.hasLeftRightSides) {
-                            Surface(
-                                shape = RoundedCornerShape(999.dp),
-                                color = if (isSecondHalfOfBilateral) AmberWarm else EmeraldVibrant
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (currentExercise.hasLeftRightSides) {
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (isSecondHalfOfBilateral) AmberWarm else EmeraldVibrant
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.SwapHoriz,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(16.dp)
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.SwapHoriz,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = if (isSecondHalfOfBilateral) "สลับอีกข้าง" else "ข้างแรก",
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            } else {
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = Color.Black.copy(alpha = 0.55f)
+                                ) {
                                     Text(
-                                        text = if (isSecondHalfOfBilateral) "สลับอีกข้าง" else "ข้างแรก",
-                                        color = Color.White,
+                                        text = if (isTimerRunning) "กำลังยืดต่อเนื่อง" else "พักจับเวลา",
+                                        color = MintBright,
                                         style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                     )
                                 }
                             }
-                        } else {
-                            Surface(
-                                shape = RoundedCornerShape(999.dp),
-                                color = Color.Black.copy(alpha = 0.45f)
-                            ) {
-                                Text(
-                                    text = if (isTimerRunning) "กำลังยืดต่อเนื่อง" else "พักจับเวลา (ดูตัวอย่างท่า)",
-                                    color = MintBright,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                )
+
+                            if (useCameraCoach && hasCameraPerm) {
+                                IconButton(
+                                    onClick = { useFrontCamera = !useFrontCamera },
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.6f))
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Cameraswitch,
+                                        contentDescription = "สลับกล้อง",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }
 
-                    // Bottom Timer & Pose Name Overlay
+                    // Bottom Timer, AI Stretch Score Pill & Pose Name Overlay
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.48f))
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f))
+                                )
+                            )
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        if (useCameraCoach && hasCameraPerm) {
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = if (stretchFeedback.isPostureCorrect) {
+                                    EmeraldVibrant.copy(alpha = 0.92f)
+                                } else {
+                                    AmberWarm.copy(alpha = 0.92f)
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "AI ฟอร์มยืด ${stretchFeedback.formScore}% • ${stretchFeedback.feedbackText}",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -468,6 +743,7 @@ fun StretchingScreen(
             shape = RoundedCornerShape(22.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -558,6 +834,7 @@ fun StretchingScreen(
             shape = RoundedCornerShape(22.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -644,7 +921,7 @@ fun StretchingScreen(
             }
         }
 
-        // All Routine Poses List (Tap to jump/preview)
+        // All Routine Poses List
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 text = "รายการท่ายืดสำหรับ${sportType.thaiName} (${exercises.size} ท่า)",
@@ -664,22 +941,27 @@ fun StretchingScreen(
             }
         }
 
-        // Bottom Direct Workout Launch CTA
+        // Bottom Direct Launch CTA
         Button(
             onClick = onStartWorkoutNow,
             shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = ForestGreen),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp)
                 .testTag("start_workout_after_stretch_button")
         ) {
-            Icon(Icons.Rounded.FitnessCenter, contentDescription = null)
+            Icon(
+                imageVector = if (isCoolDown) Icons.Rounded.CheckCircle else Icons.Rounded.FitnessCenter,
+                contentDescription = null
+            )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (isRoutineCompleted) {
-                    "พร้อมแล้ว! เริ่มออกกำลังกาย${sportType.thaiName}"
-                } else {
-                    "ข้ามที่เหลือ แล้วเริ่มออกกำลังกายเลย"
+                text = when {
+                    isCoolDown && isRoutineCompleted -> "เสร็จสิ้นการคูลดาวน์ กลับหน้าหลัก"
+                    isCoolDown -> "เสร็จสิ้นและกลับหน้าหลัก"
+                    isRoutineCompleted -> "พร้อมแล้ว! เริ่มออกกำลังกาย${sportType.thaiName}"
+                    else -> "ข้ามที่เหลือ แล้วเริ่มออกกำลังกายเลย"
                 },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
@@ -691,8 +973,103 @@ fun StretchingScreen(
 }
 
 @Composable
+private fun StretchCameraCoachPreview(
+    stretchType: StretchAnimationType,
+    isLeftSideActive: Boolean,
+    sensitivity: DetectionSensitivity,
+    useFrontCamera: Boolean,
+    onStretchEvaluated: (StretchFormFeedback) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val previewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
+    }
+
+    val currentStretch by rememberUpdatedState(stretchType)
+    val currentSensitivity by rememberUpdatedState(sensitivity)
+    val activeFrontCamera = remember { AtomicBoolean(useFrontCamera) }
+    val boundProviderRef = remember { AtomicReference<ProcessCameraProvider?>(null) }
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    val analyzer = remember {
+        StretchPoseAnalyzer(
+            stretchTypeProvider = { currentStretch },
+            sensitivityProvider = { currentSensitivity },
+            isFrontCameraProvider = { activeFrontCamera.get() },
+            onStretchEvaluated = onStretchEvaluated
+        )
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            runCatching { boundProviderRef.get()?.unbindAll() }
+            analyzer.close()
+            analysisExecutor.shutdown()
+        }
+    }
+
+    LaunchedEffect(useFrontCamera) {
+        val providerFuture = ProcessCameraProvider.getInstance(context)
+        providerFuture.addListener({
+            try {
+                val cameraProvider = providerFuture.get()
+                boundProviderRef.set(cameraProvider)
+                val preferred = if (useFrontCamera) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                val selector = when {
+                    cameraProvider.hasCamera(preferred) -> preferred
+                    cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+                    cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+                    else -> null
+                } ?: return@addListener
+
+                activeFrontCamera.set(selector == CameraSelector.DEFAULT_FRONT_CAMERA)
+                analyzer.reset()
+
+                val previewRes = ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                    .build()
+
+                val analysisRes = ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(
+                        ResolutionStrategy(Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+                    )
+                    .build()
+
+                val preview = Preview.Builder()
+                    .setResolutionSelector(previewRes)
+                    .build()
+                    .also { it.surfaceProvider = previewView.surfaceProvider }
+
+                val analysis = ImageAnalysis.Builder()
+                    .setResolutionSelector(analysisRes)
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                    .also { it.setAnalyzer(analysisExecutor, analyzer) }
+
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+            } catch (e: Exception) {
+                Log.w("StretchCamera", "CameraX bind error: ${e.message}")
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    AndroidView(
+        factory = { previewView },
+        modifier = modifier
+    )
+}
+
+@Composable
 private fun StretchCompletedHeroCard(
     sportType: SportType,
+    isCoolDown: Boolean,
     exerciseCount: Int,
     totalMinutesText: String,
     onStartWorkoutNow: () -> Unit,
@@ -715,14 +1092,18 @@ private fun StretchCompletedHeroCard(
                 modifier = Modifier.size(56.dp)
             )
             Text(
-                text = "ยืดกล้ามเนื้อครบทั้ง $exerciseCount ท่าแล้ว!",
+                text = if (isCoolDown) "คูลดาวน์ฟื้นฟูกล้ามเนื้อครบแล้ว!" else "ยืดกล้ามเนื้อครบทั้ง $exerciseCount ท่าแล้ว!",
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
             Text(
-                text = "ร่างกายอบอุ่นและพร้อมสำหรับ${sportType.thaiName}แล้ว (ใช้เวลา $totalMinutesText นาที)",
+                text = if (isCoolDown) {
+                    "ช่วยลดอาการปวดเมื่อยหลัง${sportType.thaiName}ได้เป็นอย่างดี (ใช้เวลา $totalMinutesText นาที)"
+                } else {
+                    "ร่างกายอบอุ่นและพร้อมสำหรับ${sportType.thaiName}แล้ว (ใช้เวลา $totalMinutesText นาที)"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
                 textAlign = TextAlign.Center
@@ -749,9 +1130,15 @@ private fun StretchCompletedHeroCard(
                         .weight(1.3f)
                         .height(50.dp)
                 ) {
-                    Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                    Icon(
+                        imageVector = if (isCoolDown) Icons.Rounded.CheckCircle else Icons.Rounded.PlayArrow,
+                        contentDescription = null
+                    )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("เริ่มเล่นเลย", fontWeight = FontWeight.Bold)
+                    Text(
+                        text = if (isCoolDown) "กลับหน้าหลัก" else "เริ่มเล่นเลย",
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }

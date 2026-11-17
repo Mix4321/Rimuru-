@@ -12,6 +12,8 @@ import com.example.data.model.WorkoutSession
 import com.example.domain.ChartBarPoint
 import com.example.domain.DailyGoalSummary
 import com.example.domain.DateStreakUtils
+import com.example.domain.MoveAnalyticsEngine
+import com.example.domain.MuscleRecoveryReport
 import com.example.domain.StreakStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +30,7 @@ data class DashboardData(
     val workouts: List<WorkoutSession>,
     val dailyGoal: DailyGoalSummary,
     val streak: StreakStatus,
+    val muscleRecovery: MuscleRecoveryReport,
     val last7DaysBars: List<ChartBarPoint>,
     val last4WeeksBars: List<ChartBarPoint>,
     val pendingDraft: ActiveWorkoutDraft?
@@ -55,12 +58,14 @@ class DashboardViewModel(
             workouts = workouts,
             goalMinutes = safeProfile.dailyGoalMinutes
         )
+        val muscleRecovery = MoveAnalyticsEngine.calculateMuscleRecovery(workouts)
         UiState.Success(
             DashboardData(
                 profile = safeProfile,
                 workouts = workouts,
                 dailyGoal = dailyGoal,
                 streak = streak,
+                muscleRecovery = muscleRecovery,
                 last7DaysBars = DateStreakUtils.buildLast7DaysBars(workouts),
                 last4WeeksBars = DateStreakUtils.buildLast4WeeksBars(workouts),
                 pendingDraft = draft
