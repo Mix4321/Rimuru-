@@ -1,5 +1,6 @@
 package com.example
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -17,9 +18,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SportsHandball
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SportsHandball
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -61,16 +64,21 @@ import androidx.navigation.toRoute
 import com.example.data.firebase.WorkoutDraftStore
 import com.example.data.local.MoveRepository
 import com.example.data.local.MoveRoomDatabase
+import com.example.data.local.SettingsStore
+import com.example.data.local.ThemeMode
 import com.example.data.model.SportType
 import com.example.data.model.TrackingMode
 import com.example.data.model.UiState
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.HistoryScreen
+import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.SportSelectionScreen
 import com.example.ui.screens.StretchingScreen
 import com.example.ui.screens.WorkoutScreen
+import com.example.ui.theme.MoveTheme
 import com.example.ui.viewmodel.DashboardData
 import com.example.ui.viewmodel.DashboardViewModel
+import com.example.ui.viewmodel.SettingsViewModel
 import com.example.ui.viewmodel.WorkoutViewModel
 import kotlinx.serialization.Serializable
 
@@ -82,6 +90,9 @@ data object SportsRoute
 
 @Serializable
 data object HistoryRoute
+
+@Serializable
+data object SettingsRoute
 
 @Serializable
 data class StretchingRoute(
@@ -123,6 +134,13 @@ private enum class TopLevelTab(
         unselectedIcon = Icons.Outlined.History,
         routeObj = HistoryRoute,
         tag = "nav_tab_history"
+    ),
+    SETTINGS(
+        labelRes = R.string.nav_settings,
+        selectedIcon = Icons.Rounded.Settings,
+        unselectedIcon = Icons.Outlined.Settings,
+        routeObj = SettingsRoute,
+        tag = "nav_tab_settings"
     )
 }
 
@@ -141,6 +159,28 @@ fun AppNavigation() {
         }
     )
 
+    val settingsViewModel: SettingsViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer {
+                val app = checkNotNull(this[APPLICATION_KEY])
+                val dao = MoveRoomDatabase.getInstance(app).moveDao()
+                SettingsViewModel(
+                    settingsStore = SettingsStore(app),
+                    repository = MoveRepository(dao)
+                )
+            }
+        }
+    )
+
+    val appSettings by settingsViewModel.settings.collectAsStateWithLifecycle()
+    val settingsMessage by settingsViewModel.statusMessage.collectAsStateWithLifecycle()
+
+    val isDarkTheme = when (appSettings.themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
+
     val dashboardState by dashboardViewModel.uiState.collectAsStateWithLifecycle()
     val actionMessage by dashboardViewModel.actionMessage.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -150,6 +190,14 @@ fun AppNavigation() {
         if (msg != null) {
             snackbarHostState.showSnackbar(msg)
             dashboardViewModel.clearActionMessage()
+        }
+    }
+
+    LaunchedEffect(settingsMessage) {
+        val msg = settingsMessage
+        if (msg != null) {
+            snackbarHostState.showSnackbar(msg)
+            settingsViewModel.clearStatusMessage()
         }
     }
 
@@ -169,26 +217,28 @@ fun AppNavigation() {
         }
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val useRail = maxWidth >= 640.dp
+    MoveTheme(darkTheme = isDarkTheme) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val useRail = maxWidth >= 640.dp
 
-        Scaffold(
-            contentWindowInsets = WindowInsets.safeDrawing,
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            bottomBar = {
-                if (!useRail && !isWorkoutScreen) {
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        tonalElevation = 3.dp
-                    ) {
-                        TopLevelTab.entries.forEach { tab ->
-                            val selected = currentDest?.hierarchy?.any {
-                                when (tab) {
-                                    TopLevelTab.DASHBOARD -> it.hasRoute<DashboardRoute>()
-                                    TopLevelTab.SPORTS -> it.hasRoute<SportsRoute>()
-                                    TopLevelTab.HISTORY -> it.hasRoute<HistoryRoute>()
-                                }
-                            } == true
+            Scaffold(
+                contentWindowInsets = WindowInsets.safeDrawing,
+                snackbarHost = { SnackbarHost(snackbarHostState) },
+                bottomBar = {
+                    if (!useRail && !isWorkoutScreen) {
+                        NavigationBar(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 3.dp
+                        ) {
+                            TopLevelTab.entries.forEach { tab ->
+                                val selected = currentDest?.hierarchy?.any {
+                                    when (tab) {
+                                        TopLevelTab.DASHBOARD -> it.hasRoute<DashboardRoute>()
+                                        TopLevelTab.SPORTS -> it.hasRoute<SportsRoute>()
+                                        TopLevelTab.HISTORY -> it.hasRoute<HistoryRoute>()
+                                        TopLevelTab.SETTINGS -> it.hasRoute<SettingsRoute>()
+                                    }
+                                } == true
                             NavigationBarItem(
                                 selected = selected,
                                 onClick = { navigateTopLevel(tab) },
@@ -241,6 +291,7 @@ fun AppNavigation() {
                                     TopLevelTab.DASHBOARD -> it.hasRoute<DashboardRoute>()
                                     TopLevelTab.SPORTS -> it.hasRoute<SportsRoute>()
                                     TopLevelTab.HISTORY -> it.hasRoute<HistoryRoute>()
+                                    TopLevelTab.SETTINGS -> it.hasRoute<SettingsRoute>()
                                 }
                             } == true
                             NavigationRailItem(
@@ -334,6 +385,7 @@ fun AppNavigation() {
                             val sport = SportType.fromNameSafe(routeArgs.sportName)
                             StretchingScreen(
                                 sportType = sport,
+                                appSettings = appSettings,
                                 onBack = { navController.popBackStack() },
                                 onStartWorkoutNow = {
                                     navController.navigate(
@@ -356,6 +408,10 @@ fun AppNavigation() {
                                     onDeleteWorkout = dashboardViewModel::deleteWorkout
                                 )
                             }
+                        }
+
+                        composable<SettingsRoute> {
+                            SettingsScreen(viewModel = settingsViewModel)
                         }
 
                         composable<WorkoutRoute> { backStackEntry ->
@@ -391,6 +447,7 @@ fun AppNavigation() {
 
                             WorkoutScreen(
                                 viewModel = workoutViewModel,
+                                appSettings = appSettings,
                                 onExitToDashboard = {
                                     navController.popBackStack(DashboardRoute, inclusive = false)
                                 }
@@ -400,6 +457,7 @@ fun AppNavigation() {
                 }
             }
         }
+    }
     }
 }
 

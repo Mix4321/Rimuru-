@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.camera.PoseSkeletonSnapshot
 import com.example.data.firebase.WorkoutDraftStore
+import com.example.data.local.AppSettings
 import com.example.data.local.MoveRepository
 import com.example.data.local.SaveWorkoutOutcome
 import com.example.data.model.ActiveWorkoutDraft
@@ -81,6 +82,17 @@ class WorkoutViewModel(
     private var lastMotionSeenMillis: Long = 0L
     private var strideMetersFractionBuffer: Double = 0.0
     private var ticksSinceDraftSave: Int = 0
+    private var currentSettings: AppSettings = AppSettings()
+
+    fun updateAppSettings(settings: AppSettings) {
+        currentSettings = settings
+    }
+
+    private fun effectiveStrideMeters(sport: SportType): Double = when (sport) {
+        SportType.WALKING -> currentSettings.walkStrideMeters
+        SportType.RUNNING, SportType.FOOTBALL, SportType.BASKETBALL -> currentSettings.runStrideMeters
+        else -> sport.strideMeters
+    }
 
     fun startFreshSession(
         sportType: SportType,
@@ -220,7 +232,7 @@ class WorkoutViewModel(
             val addSteps = if (canAccumulate && state.sportType.supportsSteps) snapshot.stepDelta else 0
             val addReps = if (canAccumulate && state.sportType.supportsReps) snapshot.repDelta else 0
             val addMeters = if (canAccumulate && state.sportType.supportsDistance && addSteps > 0) {
-                accumulateMetersFromSteps(addSteps, state.sportType.strideMeters)
+                accumulateMetersFromSteps(addSteps, effectiveStrideMeters(state.sportType))
             } else {
                 0
             }
@@ -246,7 +258,7 @@ class WorkoutViewModel(
             val addSteps = if (state.sportType.supportsSteps) deltaSteps else 0
             // When GPS doesn't have an accurate outdoor fix yet (e.g. treadmill / indoor), derive real distance from real hardware steps
             val addMeters = if (state.sportType.supportsDistance && !state.gpsSnapshot.hasFix && deltaSteps > 0) {
-                accumulateMetersFromSteps(deltaSteps, state.sportType.strideMeters.coerceAtLeast(0.75))
+                accumulateMetersFromSteps(deltaSteps, effectiveStrideMeters(state.sportType).coerceAtLeast(0.72))
             } else {
                 0
             }
@@ -358,7 +370,8 @@ class WorkoutViewModel(
                 }
 
                 val idleMillis = if (lastMotionSeenMillis > 0L) nowWall - lastMotionSeenMillis else current.elapsedSeconds * 1000L
-                val shouldShowCameraTip = mode == TrackingMode.CAMERA_AI &&
+                val shouldShowCameraTip = currentSettings.autoNotifyWhenIdle &&
+                    mode == TrackingMode.CAMERA_AI &&
                     (!current.poseSnapshot.isBodyVisible || idleMillis >= 4000L)
 
                 // Scientific MET calorie formula: kcal/min = MET * weight(kg) * 3.5 / 200

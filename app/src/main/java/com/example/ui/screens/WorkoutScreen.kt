@@ -85,6 +85,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -92,6 +93,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -107,6 +109,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.camera.PoseMotionAnalyzer
 import com.example.camera.PoseOverlayCanvas
+import com.example.data.local.AppSettings
+import com.example.data.local.DetectionSensitivity
+import com.example.data.model.SportType
 import com.example.data.model.TrackingMode
 import com.example.domain.DateStreakUtils
 import com.example.sensors.DeviceMotionTracker
@@ -141,10 +146,26 @@ private fun checkActivityPermission(context: Context): Boolean =
 @Composable
 fun WorkoutScreen(
     viewModel: WorkoutViewModel,
+    appSettings: AppSettings,
     onExitToDashboard: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val view = LocalView.current
+
+    val currentSport by rememberUpdatedState(uiState.sportType)
+    val currentSensitivity by rememberUpdatedState(appSettings.detectionSensitivity)
+
+    LaunchedEffect(appSettings) {
+        viewModel.updateAppSettings(appSettings)
+    }
+
+    DisposableEffect(appSettings.keepScreenOn) {
+        view.keepScreenOn = appSettings.keepScreenOn
+        onDispose {
+            view.keepScreenOn = false
+        }
+    }
 
     var showBelowMinimumDialog by remember { mutableStateOf(false) }
     var showConfirmExitDialog by remember { mutableStateOf(false) }
@@ -152,6 +173,8 @@ fun WorkoutScreen(
     val motionTracker = remember(context) {
         DeviceMotionTracker(
             context = context,
+            sportProvider = { currentSport },
+            sensitivityProvider = { currentSensitivity },
             onStepDetected = viewModel::onSensorStepDetected,
             onJumpRepDetected = viewModel::onSensorJumpRepDetected,
             onMotionStateChanged = viewModel::onSensorMotionStateChanged
@@ -161,6 +184,8 @@ fun WorkoutScreen(
     val locationTracker = remember(context) {
         LocationDistanceTracker(
             context = context,
+            sportProvider = { currentSport },
+            sensitivityProvider = { currentSensitivity },
             onDistanceAddedMeters = viewModel::onGpsDistanceAdded,
             onGpsStateChanged = viewModel::onGpsStateChanged
         )
@@ -518,6 +543,7 @@ fun WorkoutScreen(
                 ) {
                     TrackingViewportCard(
                         uiState = uiState,
+                        sensitivity = appSettings.detectionSensitivity,
                         onMotionFrame = viewModel::onMotionFrame,
                         onToggleCameraLens = viewModel::toggleCameraLens,
                         onSelectManualEffort = viewModel::setManualEffort,
@@ -561,6 +587,7 @@ fun WorkoutScreen(
                 ) {
                     TrackingViewportCard(
                         uiState = uiState,
+                        sensitivity = appSettings.detectionSensitivity,
                         onMotionFrame = viewModel::onMotionFrame,
                         onToggleCameraLens = viewModel::toggleCameraLens,
                         onSelectManualEffort = viewModel::setManualEffort,
@@ -602,6 +629,7 @@ fun WorkoutScreen(
 @Composable
 private fun TrackingViewportCard(
     uiState: WorkoutUiState,
+    sensitivity: DetectionSensitivity,
     onMotionFrame: (com.example.camera.PoseSkeletonSnapshot) -> Unit,
     onToggleCameraLens: () -> Unit,
     onSelectManualEffort: (ManualEffortLevel) -> Unit,
@@ -609,6 +637,7 @@ private fun TrackingViewportCard(
     onOpenAppSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val currentSensitivityForCard = sensitivity
     Card(
         shape = RoundedCornerShape(26.dp),
         colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
@@ -618,6 +647,8 @@ private fun TrackingViewportCard(
             uiState.trackingMode == TrackingMode.CAMERA_AI && uiState.cameraPermissionGranted -> {
                 Box(modifier = Modifier.fillMaxSize()) {
                     CameraPosePreview(
+                        sportType = uiState.sportType,
+                        sensitivity = currentSensitivityForCard,
                         useFrontCamera = uiState.useFrontCamera,
                         onMotionAnalyzed = onMotionFrame,
                         modifier = Modifier.fillMaxSize()
@@ -958,6 +989,8 @@ private fun SensorGpsStatusContent(
 
 @Composable
 private fun CameraPosePreview(
+    sportType: SportType,
+    sensitivity: DetectionSensitivity,
     useFrontCamera: Boolean,
     onMotionAnalyzed: (com.example.camera.PoseSkeletonSnapshot) -> Unit,
     modifier: Modifier = Modifier
@@ -970,11 +1003,15 @@ private fun CameraPosePreview(
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
+    val currentSport by rememberUpdatedState(sportType)
+    val currentSensitivity by rememberUpdatedState(sensitivity)
     val activeFrontCamera = remember { java.util.concurrent.atomic.AtomicBoolean(useFrontCamera) }
     val boundProviderRef = remember { java.util.concurrent.atomic.AtomicReference<ProcessCameraProvider?>(null) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val poseAnalyzer = remember {
         PoseMotionAnalyzer(
+            sportProvider = { currentSport },
+            sensitivityProvider = { currentSensitivity },
             isFrontCameraProvider = { activeFrontCamera.get() },
             onMotionAnalyzed = onMotionAnalyzed
         )

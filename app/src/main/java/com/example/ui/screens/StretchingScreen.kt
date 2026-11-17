@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -56,6 +58,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -68,10 +71,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.data.local.AppSettings
 import com.example.data.model.SportType
 import com.example.data.model.StretchExercise
 import com.example.data.model.StretchingCatalog
@@ -89,6 +94,7 @@ private val STRETCH_DURATION_PRESETS = listOf(15, 20, 30, 45, 60)
 @Composable
 fun StretchingScreen(
     sportType: SportType,
+    appSettings: AppSettings,
     onBack: () -> Unit,
     onStartWorkoutNow: () -> Unit,
     modifier: Modifier = Modifier
@@ -96,10 +102,32 @@ fun StretchingScreen(
     val exercises = remember(sportType) { StretchingCatalog.exercisesFor(sportType) }
     val focusSummary = remember(sportType) { StretchingCatalog.summaryFocusFor(sportType) }
     val haptic = LocalHapticFeedback.current
+    val view = LocalView.current
+
+    val toneGen = remember {
+        runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 65) }.getOrNull()
+    }
+
+    DisposableEffect(appSettings.keepScreenOn) {
+        view.keepScreenOn = appSettings.keepScreenOn
+        onDispose {
+            view.keepScreenOn = false
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            runCatching { toneGen?.release() }
+        }
+    }
 
     var currentIndex by remember(sportType) { mutableIntStateOf(0) }
-    var secondsPerStretch by remember(sportType) { mutableIntStateOf(30) }
-    var remainingSeconds by remember(sportType) { mutableIntStateOf(30) }
+    var secondsPerStretch by remember(sportType, appSettings.defaultStretchSeconds) {
+        mutableIntStateOf(appSettings.defaultStretchSeconds.coerceIn(10, 90))
+    }
+    var remainingSeconds by remember(sportType, appSettings.defaultStretchSeconds) {
+        mutableIntStateOf(appSettings.defaultStretchSeconds.coerceIn(10, 90))
+    }
     var isTimerRunning by remember(sportType) { mutableStateOf(true) }
     var isRoutineCompleted by remember(sportType) { mutableStateOf(false) }
 
@@ -107,10 +135,15 @@ fun StretchingScreen(
     val isSecondHalfOfBilateral = currentExercise.hasLeftRightSides &&
         remainingSeconds <= (secondsPerStretch / 2)
 
-    // Haptic nudge when switching to the opposite side halfway through bilateral stretch
+    // Haptic & subtle audio cue when switching to the opposite side halfway through bilateral stretch
     LaunchedEffect(currentIndex, isSecondHalfOfBilateral, isTimerRunning) {
         if (isTimerRunning && currentExercise.hasLeftRightSides && isSecondHalfOfBilateral) {
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            if (appSettings.enableHapticFeedback) {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+            if (appSettings.enableStretchBeep) {
+                runCatching { toneGen?.startTone(ToneGenerator.TONE_PROP_BEEP, 160) }
+            }
         }
     }
 
@@ -134,7 +167,12 @@ fun StretchingScreen(
             if (nextRem > 0) {
                 remainingSeconds = nextRem
             } else {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                if (appSettings.enableHapticFeedback) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                }
+                if (appSettings.enableStretchBeep) {
+                    runCatching { toneGen?.startTone(ToneGenerator.TONE_PROP_ACK, 240) }
+                }
                 if (currentIndex < exercises.lastIndex) {
                     currentIndex += 1
                     remainingSeconds = secondsPerStretch

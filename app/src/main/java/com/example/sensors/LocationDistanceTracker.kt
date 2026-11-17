@@ -11,6 +11,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import com.example.data.local.DetectionSensitivity
+import com.example.data.model.SportType
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -24,6 +26,8 @@ data class GpsTrackingSnapshot(
 
 class LocationDistanceTracker(
     private val context: Context,
+    private val sportProvider: () -> SportType,
+    private val sensitivityProvider: () -> DetectionSensitivity,
     private val onDistanceAddedMeters: (Int) -> Unit,
     private val onGpsStateChanged: (GpsTrackingSnapshot) -> Unit
 ) : LocationListener {
@@ -72,7 +76,7 @@ class LocationDistanceTracker(
             runCatching {
                 locationManager.requestLocationUpdates(
                     LocationManager.GPS_PROVIDER,
-                    1500L,
+                    1200L,
                     2f,
                     this,
                     Looper.getMainLooper()
@@ -89,7 +93,7 @@ class LocationDistanceTracker(
                 runCatching {
                     locationManager.requestLocationUpdates(
                         LocationManager.FUSED_PROVIDER,
-                        2000L,
+                        1800L,
                         2f,
                         this,
                         Looper.getMainLooper()
@@ -107,7 +111,7 @@ class LocationDistanceTracker(
                 runCatching {
                     locationManager.requestLocationUpdates(
                         LocationManager.NETWORK_PROVIDER,
-                        2500L,
+                        2200L,
                         3f,
                         this,
                         Looper.getMainLooper()
@@ -137,9 +141,11 @@ class LocationDistanceTracker(
     override fun onLocationChanged(location: Location) {
         if (!isStarted) return
 
+        val sport = sportProvider()
+        val sensitivity = sensitivityProvider()
         val accuracy = if (location.hasAccuracy()) location.accuracy else 999f
-        // Reject poor indoor/cell-tower fixes to prevent huge fake distance jumps
-        if (accuracy > 28f) {
+
+        if (accuracy > sensitivity.gpsMaxAccuracyMeters) {
             onGpsStateChanged(
                 GpsTrackingSnapshot(
                     hasLocationPermission = true,
@@ -161,22 +167,27 @@ class LocationDistanceTracker(
                     isGpsEnabled = true,
                     hasFix = true,
                     accuracyMeters = accuracy,
-                    currentSpeedKmh = if (location.hasSpeed() && location.speed > 0.4f) location.speed * 3.6f else 0f
+                    currentSpeedKmh = if (location.hasSpeed() && location.speed > 0.45f) location.speed * 3.6f else 0f
                 )
             )
             return
         }
 
         val deltaMeters = prev.distanceTo(location)
-        val dtSec = ((location.time - prev.time).coerceAtLeast(100L)) / 1000.0f
+        val dtSec = ((location.time - prev.time).coerceAtLeast(150L)) / 1000.0f
         val impliedSpeedMps = deltaMeters / dtSec
-        val minDriftThreshold = max(2.2f, accuracy * 0.35f)
+        val maxPlausibleSpeedMps = when (sport) {
+            SportType.WALKING -> 3.6f   // ~13 km/h
+            SportType.CYCLING -> 18.5f  // ~66 km/h
+            else -> 9.5f                // ~34 km/h running / field sports
+        }
+        val minDriftThreshold = max(2.4f, accuracy * 0.40f)
 
-        // Ignore stationary GPS jitter and impossible teleport spikes (> 25 m/s = 90 km/h)
-        val isGenuineMovement = deltaMeters >= minDriftThreshold && impliedSpeedMps <= 25f
+        val isGenuineMovement = deltaMeters >= minDriftThreshold &&
+            impliedSpeedMps in 0.35f..maxPlausibleSpeedMps
         val measuredSpeedMps = when {
             !isGenuineMovement -> 0f
-            location.hasSpeed() && location.speed in 0.35f..25f -> location.speed
+            location.hasSpeed() && location.speed in 0.35f..maxPlausibleSpeedMps -> location.speed
             else -> impliedSpeedMps
         }
 
