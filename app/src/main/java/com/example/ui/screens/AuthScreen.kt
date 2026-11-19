@@ -126,7 +126,7 @@ fun AuthScreen(
     LaunchedEffect(Unit) {
         if (!attemptedSilentSignIn) {
             attemptedSilentSignIn = true
-            val serverClientId = context.getString(R.string.default_web_client_id)
+            val serverClientId = resolveDefaultWebClientId(context)
             if (serverClientId.isNotBlank()) {
                 val googleIdOption = GetGoogleIdOption.Builder()
                     .setFilterByAuthorizedAccounts(true)
@@ -149,7 +149,11 @@ fun AuthScreen(
     fun launchInteractiveGoogleAuth(isRegister: Boolean) {
         scope.launch {
             try {
-                val serverClientId = context.getString(R.string.default_web_client_id)
+                val serverClientId = resolveDefaultWebClientId(context)
+                if (serverClientId.isBlank()) {
+                    onAuthError("ไม่พบการตั้งค่า Firebase (google-services.json) สำหรับชุดติดตั้งนี้")
+                    return@launch
+                }
                 val signInOption = GetSignInWithGoogleOption.Builder(serverClientId).build()
                 val request = GetCredentialRequest.Builder()
                     .addCredentialOption(signInOption)
@@ -720,6 +724,15 @@ private fun AuthFeatureHighlights() {
             }
         }
     }
+}
+
+private fun resolveDefaultWebClientId(context: Context): String {
+    val resId = context.resources.getIdentifier(
+        "default_web_client_id",
+        "string",
+        context.packageName
+    )
+    return if (resId != 0) context.getString(resId).trim() else ""
 }
 
 private fun extractGoogleIdToken(credential: androidx.credentials.Credential): String? {
