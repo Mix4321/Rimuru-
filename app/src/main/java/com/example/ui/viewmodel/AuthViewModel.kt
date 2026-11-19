@@ -11,11 +11,11 @@ import com.example.data.model.UserProfile
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -59,13 +59,27 @@ class AuthViewModel(
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
     private var preferredTab: AuthModeTab = AuthModeTab.LOGIN
+    private var activeResolutionUid: String? = null
+    private var resolutionJob: Job? = null
+    private var isCompletingInlineRegistration: Boolean = false
 
     private val authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
         val user = firebaseAuth.currentUser
         if (user == null) {
+            resolutionJob?.cancel()
+            resolutionJob = null
+            activeResolutionUid = null
+            isCompletingInlineRegistration = false
             _isBusy.value = false
             _gateState.value = AuthGateState.SignedOut(preferredTab)
         } else {
+            val currentGate = _gateState.value
+            if (currentGate is AuthGateState.Authenticated && currentGate.uid == user.uid) {
+                return@AuthStateListener
+            }
+            if (activeResolutionUid == user.uid && resolutionJob?.isActive == true) {
+                return@AuthStateListener
+            }
             resolveAuthenticatedUser(
                 uid = user.uid,
                 googleName = user.displayName,
@@ -97,6 +111,7 @@ class AuthViewModel(
     ) {
         if (_isBusy.value) return
         preferredTab = if (isRegisterFlow) AuthModeTab.REGISTER else AuthModeTab.LOGIN
+        isCompletingInlineRegistration = isRegisterFlow
         _isBusy.value = true
         _errorMessage.value = null
 
@@ -106,22 +121,34 @@ class AuthViewModel(
                 val authResult = auth.signInWithCredential(credential).await()
                 val user = authResult.user ?: error("ไม่พบข้อมูลบัญชี Google หลังยืนยันตัวตน")
 
-                if (isRegisterFlow && !prefilledName.isNullOrBlank()) {
-                    // Registration tab already collected profile metrics cleanly; persist immediately
+                if (isRegisterFlow) {
+                    val resolvedName = prefilledName?.takeIf { it.isNotBlank() }
+                        ?: user.displayName?.takeIf { it.isNotBlank() }
+                        ?: "นักกีฬา MOVE"
                     saveRegistrationAndSync(
                         uid = user.uid,
-                        displayName = prefilledName,
+                        displayName = resolvedName,
                         email = user.email,
                         photoUrl = user.photoUrl?.toString(),
                         weightKg = prefilledWeight ?: 65f,
                         heightCm = prefilledHeight ?: 170f,
                         dailyGoalMinutes = prefilledGoalMinutes ?: 0
                     )
+                    isCompletingInlineRegistration = false
+                } else if (activeResolutionUid != user.uid && _gateState.value !is AuthGateState.Authenticated) {
+                    resolveAuthenticatedUser(
+                        uid = user.uid,
+                        googleName = user.displayName,
+                        email = user.email,
+                        photoUrl = user.photoUrl?.toString()
+                    )
                 }
             } catch (e: CancellationException) {
+                isCompletingInlineRegistration = false
                 throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Google credential sign-in failed", e)
+                isCompletingInlineRegistration = false
                 _isBusy.value = false
                 _errorMessage.value = e.localizedMessage ?: "เข้าสู่ระบบไม่สำเร็จ กรุณาลองอีกครั้ง"
             }
@@ -134,16 +161,33 @@ class AuthViewModel(
         email: String?,
         photoUrl: String?
     ) {
+        resolutionJob?.cancel()
+        activeResolutionUid = uid
         _gateState.value = AuthGateState.CheckingSession
-        viewModelScope.launch {
+        resolutionJob = viewModelScope.launch {
             val profileResult = cloudRepository.getCloudProfileOnce(uid)
             val cloudProfile = profileResult.getOrNull()
 
+            if (isCompletingInlineRegistration) {
+                // Inline registration flow in signInWithGoogleIdToken will finalize state
+                return@launch
+            }
+
+            if (profileResult.isFailure) {
+                val err = profileResult.exceptionOrNull()
+                Log.w(TAG, "Failed to load cloud profile on sign-in", err)
+                _isBusy.value = false
+                _errorMessage.value = "เชื่อมต่อข้อมูลคลาวด์ไม่สำเร็จ: ${err?.localizedMessage ?: "กรุณาลองอีกครั้ง"}"
+                _gateState.value = AuthGateState.NeedsOnboarding(
+                    uid = uid,
+                    defaultName = googleName?.takeIf { it.isNotBlank() } ?: "นักกีฬา MOVE",
+                    email = email,
+                    photoUrl = photoUrl
+                )
+                return@launch
+            }
+
             if (cloudProfile == null || !cloudProfile.onboardingCompleted) {
-                if (preferredTab == AuthModeTab.REGISTER && _isBusy.value) {
-                    // Registration callback will complete saving
-                    return@launch
-                }
                 _isBusy.value = false
                 _gateState.value = AuthGateState.NeedsOnboarding(
                     uid = uid,
@@ -268,12 +312,17 @@ class AuthViewModel(
     }
 
     fun signOut(onClearCredentialState: suspend () -> Unit = {}) {
+        resolutionJob?.cancel()
+        resolutionJob = null
+        activeResolutionUid = null
+        isCompletingInlineRegistration = false
         viewModelScope.launch {
             withContext(NonCancellable) {
                 runCatching { onClearCredentialState() }
                 runCatching { localRepository.clearLocalAccountData() }
                 auth.signOut()
             }
+            _isBusy.value = false
             _errorMessage.value = null
             _gateState.value = AuthGateState.SignedOut(AuthModeTab.LOGIN)
         }
@@ -285,6 +334,7 @@ class AuthViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        resolutionJob?.cancel()
         auth.removeAuthStateListener(authStateListener)
     }
 

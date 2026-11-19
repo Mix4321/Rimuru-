@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.util.Log
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.BorderStroke
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudDone
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Login
 import androidx.compose.material.icons.rounded.Person
@@ -109,22 +112,32 @@ fun AuthScreen(
         prefilledHeight: Float?,
         prefilledGoalMinutes: Int?
     ) -> Unit,
-    onAuthError: (String) -> Unit,
+    onAuthError: (String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val activityContext = remember(context) { context.findActivity() ?: context }
     val scope = rememberCoroutineScope()
-    val credentialManager = remember(context) { CredentialManager.create(context) }
+    val scrollState = rememberScrollState()
+    val credentialManager = remember(activityContext) { CredentialManager.create(activityContext) }
 
     var registerName by remember { mutableStateOf("") }
     var registerWeight by remember { mutableStateOf("65") }
     var registerHeight by remember { mutableStateOf("170") }
     var registerGoalMinutes by remember { mutableIntStateOf(0) }
     var attemptedSilentSignIn by remember { mutableStateOf(false) }
+    var isLaunchingSheet by remember { mutableStateOf(false) }
+    val effectiveBusy = isBusy || isLaunchingSheet
+
+    LaunchedEffect(errorMessage) {
+        if (!errorMessage.isNullOrBlank()) {
+            scrollState.animateScrollTo(0)
+        }
+    }
 
     // Silent auto-login on cold launch if user already authorized this device
     LaunchedEffect(Unit) {
-        if (!attemptedSilentSignIn) {
+        if (!attemptedSilentSignIn && !effectiveBusy) {
             attemptedSilentSignIn = true
             val serverClientId = resolveDefaultWebClientId(context)
             if (serverClientId.isNotBlank()) {
@@ -137,9 +150,11 @@ fun AuthScreen(
                     .addCredentialOption(googleIdOption)
                     .build()
                 runCatching {
-                    val response = credentialManager.getCredential(context, request)
-                    extractGoogleIdToken(response.credential)?.let { token ->
-                        onGoogleIdTokenReceived(token, false, null, null, null, null)
+                    val response = credentialManager.getCredential(activityContext, request)
+                    if (!isLaunchingSheet && !isBusy) {
+                        extractGoogleIdToken(response.credential)?.let { token ->
+                            onGoogleIdTokenReceived(token, false, null, null, null, null)
+                        }
                     }
                 }
             }
@@ -147,7 +162,10 @@ fun AuthScreen(
     }
 
     fun launchInteractiveGoogleAuth(isRegister: Boolean) {
+        if (effectiveBusy) return
         scope.launch {
+            isLaunchingSheet = true
+            onAuthError(null)
             try {
                 val serverClientId = resolveDefaultWebClientId(context)
                 if (serverClientId.isBlank()) {
@@ -158,7 +176,7 @@ fun AuthScreen(
                 val request = GetCredentialRequest.Builder()
                     .addCredentialOption(signInOption)
                     .build()
-                val response = credentialManager.getCredential(context, request)
+                val response = credentialManager.getCredential(activityContext, request)
                 val idToken = extractGoogleIdToken(response.credential)
                 if (idToken != null) {
                     onGoogleIdTokenReceived(
@@ -172,16 +190,23 @@ fun AuthScreen(
                 } else {
                     onAuthError("ไม่พบโทเค็นจากบัญชี Google กรุณาลองใหม่อีกครั้ง")
                 }
-            } catch (_: GetCredentialCancellationException) {
+            } catch (e: GetCredentialCancellationException) {
+                Log.w(AUTH_TAG, "Google Sign-In cancelled or dismissed: ${e.message}", e)
                 onAuthError(context.getString(R.string.error_sign_in_cancelled))
-            } catch (_: NoCredentialException) {
+            } catch (e: NoCredentialException) {
+                Log.w(AUTH_TAG, "No Google credentials found", e)
                 onAuthError("ไม่พบบัญชี Google บนอุปกรณ์นี้ กรุณาเพิ่มบัญชี Google ในตั้งค่าเครื่อง")
             } catch (e: GetCredentialException) {
-                Log.w(AUTH_TAG, "Credential Manager error", e)
-                onAuthError("ไม่สามารถเชื่อมต่อ Google Sign-In: ${e.localizedMessage ?: "ลองใหม่อีกครั้ง"}")
+                Log.w(AUTH_TAG, "Credential Manager error: ${e.type} - ${e.errorMessage}", e)
+                val detail = e.errorMessage?.toString()?.takeIf { it.isNotBlank() }
+                    ?: e.localizedMessage
+                    ?: e.type
+                onAuthError("ไม่สามารถเชื่อมต่อ Google Sign-In: $detail")
             } catch (e: Exception) {
                 Log.w(AUTH_TAG, "Unexpected auth error", e)
-                onAuthError("เกิดข้อผิดพลาดในการเข้าสู่ระบบ กรุณาลองอีกครั้ง")
+                onAuthError("เกิดข้อผิดพลาดในการเข้าสู่ระบบ: ${e.localizedMessage ?: "กรุณาลองอีกครั้ง"}")
+            } finally {
+                isLaunchingSheet = false
             }
         }
     }
@@ -205,7 +230,7 @@ fun AuthScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 520.dp)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .padding(horizontal = 22.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(18.dp)
@@ -292,6 +317,34 @@ fun AuthScreen(
                         }
                     }
 
+                    if (!errorMessage.isNullOrBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("auth_error_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = errorMessage,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+
                     AnimatedContent(
                         targetState = selectedTab,
                         label = "auth_tab_content"
@@ -323,7 +376,7 @@ fun AuthScreen(
 
                                 Button(
                                     onClick = { launchInteractiveGoogleAuth(isRegister = false) },
-                                    enabled = !isBusy,
+                                    enabled = !effectiveBusy,
                                     shape = RoundedCornerShape(18.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = ForestGreen),
                                     modifier = Modifier
@@ -331,11 +384,17 @@ fun AuthScreen(
                                         .height(54.dp)
                                         .testTag("google_sign_in_button")
                                 ) {
-                                    if (isBusy) {
+                                    if (effectiveBusy) {
                                         CircularProgressIndicator(
                                             color = Color.White,
                                             strokeWidth = 2.dp,
                                             modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Text(
+                                            text = "กำลังเข้าสู่ระบบ...",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold
                                         )
                                     } else {
                                         Icon(Icons.Rounded.Login, contentDescription = null)
@@ -450,7 +509,7 @@ fun AuthScreen(
 
                                 Button(
                                     onClick = { launchInteractiveGoogleAuth(isRegister = true) },
-                                    enabled = !isBusy,
+                                    enabled = !effectiveBusy,
                                     shape = RoundedCornerShape(18.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = EmeraldVibrant),
                                     modifier = Modifier
@@ -458,11 +517,17 @@ fun AuthScreen(
                                         .height(54.dp)
                                         .testTag("google_register_button")
                                 ) {
-                                    if (isBusy) {
+                                    if (effectiveBusy) {
                                         CircularProgressIndicator(
                                             color = Color.White,
                                             strokeWidth = 2.dp,
                                             modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Text(
+                                            text = "กำลังสมัครสมาชิก...",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold
                                         )
                                     } else {
                                         Icon(Icons.Rounded.PersonAdd, contentDescription = null)
@@ -490,21 +555,6 @@ fun AuthScreen(
                                     }
                                 }
                             }
-                        }
-                    }
-
-                    if (!errorMessage.isNullOrBlank()) {
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = errorMessage,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(12.dp)
-                            )
                         }
                     }
                 }
@@ -726,6 +776,12 @@ private fun AuthFeatureHighlights() {
     }
 }
 
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 private fun resolveDefaultWebClientId(context: Context): String {
     val resId = context.resources.getIdentifier(
         "default_web_client_id",
@@ -736,13 +792,19 @@ private fun resolveDefaultWebClientId(context: Context): String {
 }
 
 private fun extractGoogleIdToken(credential: androidx.credentials.Credential): String? {
+    if (credential is GoogleIdTokenCredential) {
+        return credential.idToken
+    }
     return if (credential is CustomCredential &&
         credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
     ) {
         runCatching {
             GoogleIdTokenCredential.createFrom(credential.data).idToken
+        }.onFailure { err ->
+            Log.w(AUTH_TAG, "Failed to parse GoogleIdTokenCredential", err)
         }.getOrNull()
     } else {
+        Log.w(AUTH_TAG, "Unexpected credential type: ${credential::class.java.simpleName} / ${credential.type}")
         null
     }
 }
