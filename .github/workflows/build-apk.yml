@@ -48,13 +48,74 @@ jobs:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
         run: |
-          if [ ! -f app/google-services.json ]; then
-            if [ -n "$GOOGLE_SERVICES_JSON" ]; then
-              printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
-            elif [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
-              printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
-            fi
-          fi
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import sys
+
+          target = "app/google-services.json"
+          if os.path.exists(target):
+              print("app/google-services.json already exists.")
+              sys.exit(0)
+
+          raw_json = (os.environ.get("GOOGLE_SERVICES_JSON") or "").strip()
+          raw_b64 = (os.environ.get("GOOGLE_SERVICES_JSON_BASE64") or "").strip()
+
+          def try_parse_json(text: str):
+              cleaned = text.lstrip("\ufeff").strip()
+              if not cleaned:
+                  return None
+              try:
+                  obj = json.loads(cleaned)
+                  if isinstance(obj, dict):
+                      return json.dumps(obj, ensure_ascii=False, indent=2) + "\n"
+              except Exception:
+                  pass
+              return None
+
+          def try_decode_b64(text: str):
+              if ";base64," in text:
+                  text = text.split(";base64,", 1)[1]
+              text = re.sub(r"-----BEGIN [^-]+-----|-----END [^-]+-----", "", text)
+              cleaned = re.sub(r"\s+", "", text).strip("\"'")
+              cleaned = cleaned.replace("-", "+").replace("_", "/")
+              cleaned = re.sub(r"[^A-Za-z0-9+/=]", "", cleaned).rstrip("=")
+              if not cleaned:
+                  return None
+              cleaned += "=" * ((-len(cleaned)) % 4)
+              try:
+                  raw_bytes = base64.b64decode(cleaned)
+              except Exception:
+                  return None
+              for encoding in ("utf-8-sig", "utf-16", "utf-16-le"):
+                  try:
+                      parsed = try_parse_json(raw_bytes.decode(encoding))
+                      if parsed:
+                          return parsed
+                  except Exception:
+                      pass
+              return None
+
+          result = None
+          if raw_json:
+              result = try_parse_json(raw_json) or try_decode_b64(raw_json)
+              if not result:
+                  print("::warning::GOOGLE_SERVICES_JSON is set but could not be parsed as valid JSON. Continuing build without google-services.json.")
+
+          if not result and raw_b64:
+              result = try_parse_json(raw_b64) or try_decode_b64(raw_b64)
+              if not result:
+                  print("::warning::GOOGLE_SERVICES_JSON_BASE64 is set but is neither valid Base64-encoded JSON nor raw JSON. Continuing build without google-services.json.")
+
+          if result:
+              with open(target, "w", encoding="utf-8") as f:
+                  f.write(result)
+              print(f"Prepared {target} from GitHub Secret.")
+          else:
+              print("Proceeding without app/google-services.json (APK will still compile).")
+          PY
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
