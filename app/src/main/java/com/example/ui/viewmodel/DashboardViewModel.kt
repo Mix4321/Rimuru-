@@ -3,6 +3,7 @@ package com.example.ui.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.firebase.MoveCloudRepository
 import com.example.data.firebase.WorkoutDraftStore
 import com.example.data.local.MoveRepository
 import com.example.data.model.ActiveWorkoutDraft
@@ -42,7 +43,9 @@ data class DashboardData(
 
 class DashboardViewModel(
     private val repository: MoveRepository,
-    private val draftStore: WorkoutDraftStore
+    private val draftStore: WorkoutDraftStore,
+    private val cloudRepository: MoveCloudRepository? = null,
+    private val currentUserId: String = ""
 ) : ViewModel() {
 
     private val _actionMessage = MutableStateFlow<String?>(null)
@@ -100,7 +103,24 @@ class DashboardViewModel(
     fun updateProfile(name: String, weightKg: Float) {
         viewModelScope.launch {
             repository.updateProfile(name, weightKg)
-                .onSuccess { _actionMessage.value = "บันทึกข้อมูลโปรไฟล์แล้ว" }
+                .onSuccess {
+                    if (cloudRepository != null && currentUserId.isNotBlank()) {
+                        val updated = repository.getUserProfileOnce()
+                        cloudRepository.registerOrUpdateProfile(
+                            userId = currentUserId,
+                            displayName = updated.displayName,
+                            email = null,
+                            weightKg = updated.weightKg,
+                            heightCm = null,
+                            dailyGoalMinutes = updated.dailyGoalMinutes,
+                            currentStreak = updated.currentStreak,
+                            longestStreak = updated.longestStreak,
+                            lastActiveDate = updated.lastActiveDate,
+                            onboardingCompleted = true
+                        )
+                    }
+                    _actionMessage.value = "บันทึกข้อมูลโปรไฟล์แล้ว"
+                }
                 .onFailure { err ->
                     _actionMessage.value = "อัปเดตโปรไฟล์ไม่สำเร็จ: ${err.localizedMessage ?: "ลองใหม่อีกครั้ง"}"
                 }
@@ -111,6 +131,21 @@ class DashboardViewModel(
         viewModelScope.launch {
             repository.updateDailyGoal(minutes)
                 .onSuccess {
+                    if (cloudRepository != null && currentUserId.isNotBlank()) {
+                        val updated = repository.getUserProfileOnce()
+                        cloudRepository.registerOrUpdateProfile(
+                            userId = currentUserId,
+                            displayName = updated.displayName,
+                            email = null,
+                            weightKg = updated.weightKg,
+                            heightCm = null,
+                            dailyGoalMinutes = updated.dailyGoalMinutes,
+                            currentStreak = updated.currentStreak,
+                            longestStreak = updated.longestStreak,
+                            lastActiveDate = updated.lastActiveDate,
+                            onboardingCompleted = true
+                        )
+                    }
                     _actionMessage.value = if (minutes <= 0) {
                         "เปลี่ยนเป็นโหมดเวลาอิสระแล้ว"
                     } else {
@@ -126,7 +161,19 @@ class DashboardViewModel(
     fun deleteWorkout(workoutId: String) {
         viewModelScope.launch {
             repository.deleteWorkout(workoutId)
-                .onSuccess { _actionMessage.value = "ลบรายการออกกำลังกายแล้ว" }
+                .onSuccess {
+                    if (cloudRepository != null && currentUserId.isNotBlank()) {
+                        cloudRepository.deleteWorkout(currentUserId, workoutId)
+                        val updated = repository.getUserProfileOnce()
+                        cloudRepository.syncStreakFields(
+                            userId = currentUserId,
+                            currentStreak = updated.currentStreak,
+                            longestStreak = updated.longestStreak,
+                            lastActiveDate = updated.lastActiveDate
+                        )
+                    }
+                    _actionMessage.value = "ลบรายการออกกำลังกายแล้ว"
+                }
                 .onFailure { err ->
                     _actionMessage.value = "ลบรายการไม่สำเร็จ: ${err.localizedMessage ?: "ลองใหม่อีกครั้ง"}"
                 }

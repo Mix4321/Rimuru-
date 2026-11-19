@@ -1,0 +1,240 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidSportType(sportType) {
+      return sportType in [
+        'RUNNING',
+        'WALKING',
+        'JUMP_ROPE',
+        'FOOTBALL',
+        'BASKETBALL',
+        'BADMINTON',
+        'CYCLING',
+        'GENERAL'
+      ];
+    }
+
+    function isValidTrackingMode(mode) {
+      return mode in ['CAMERA_AI', 'SENSOR_GPS', 'MANUAL'];
+    }
+
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.userId == request.auth.uid &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 160)) &&
+             data.dailyGoalMinutes is int && data.dailyGoalMinutes >= 0 && data.dailyGoalMinutes <= 300 &&
+             data.weightKg is number && data.weightKg >= 25 && data.weightKg <= 250 &&
+             data.heightCm is number && data.heightCm >= 120 && data.heightCm <= 220 &&
+             data.currentStreak is int && data.currentStreak >= 0 && data.currentStreak <= 10000 &&
+             data.longestStreak is int && data.longestStreak >= 0 && data.longestStreak <= 10000 &&
+             (!('lastActiveDate' in data) || data.lastActiveDate == null || (data.lastActiveDate is string && data.lastActiveDate.size() <= 20)) &&
+             data.onboardingCompleted is bool;
+    }
+
+    function isValidWorkoutSession(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.userId == request.auth.uid &&
+             data.sportType is string && data.sportType.size() <= 32 && isValidSportType(data.sportType) &&
+             data.durationSeconds is int && data.durationSeconds >= 5 && data.durationSeconds <= 86400 &&
+             data.caloriesBurned is int && data.caloriesBurned >= 0 && data.caloriesBurned <= 20000 &&
+             data.steps is int && data.steps >= 0 && data.steps <= 500000 &&
+             data.distanceMeters is int && data.distanceMeters >= 0 && data.distanceMeters <= 500000 &&
+             data.repsCount is int && data.repsCount >= 0 && data.repsCount <= 50000 &&
+             data.trackingMode is string && data.trackingMode.size() <= 32 && isValidTrackingMode(data.trackingMode) &&
+             data.motionActiveSeconds is int && data.motionActiveSeconds >= 0 && data.motionActiveSeconds <= 86400 &&
+             data.activityDate is string && data.activityDate.size() >= 1 && data.activityDate.size() <= 20 &&
+             data.startedAtMillis is int && data.startedAtMillis >= 0 &&
+             data.endedAtMillis is int && data.endedAtMillis >= 0 &&
+             data.avgFormScore is int && data.avgFormScore >= 0 && data.avgFormScore <= 100 &&
+             data.avgSymmetryPercent is int && data.avgSymmetryPercent >= 0 && data.avgSymmetryPercent <= 100 &&
+             (!('routeJson' in data) || data.routeJson == null || (data.routeJson is string && data.routeJson.size() <= 65536)) &&
+             data.workoutSubType is string && data.workoutSubType.size() <= 16 && (data.workoutSubType in ['FREE', 'HIIT']);
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll([
+                         'userId',
+                         'displayName',
+                         'dailyGoalMinutes',
+                         'weightKg',
+                         'heightCm',
+                         'currentStreak',
+                         'longestStreak',
+                         'onboardingCompleted',
+                         'createdAt',
+                         'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId',
+                         'displayName',
+                         'email',
+                         'dailyGoalMinutes',
+                         'weightKg',
+                         'heightCm',
+                         'currentStreak',
+                         'longestStreak',
+                         'lastActiveDate',
+                         'onboardingCompleted',
+                         'createdAt',
+                         'updatedAt'
+                       ]) &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time &&
+                       (
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'displayName',
+                           'email',
+                           'dailyGoalMinutes',
+                           'weightKg',
+                           'heightCm',
+                           'onboardingCompleted',
+                           'updatedAt'
+                         ]) ||
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'currentStreak',
+                           'longestStreak',
+                           'lastActiveDate',
+                           'updatedAt'
+                         ]) ||
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'displayName',
+                           'email',
+                           'dailyGoalMinutes',
+                           'weightKg',
+                           'heightCm',
+                           'currentStreak',
+                           'longestStreak',
+                           'lastActiveDate',
+                           'onboardingCompleted',
+                           'updatedAt'
+                         ])
+                       );
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /workouts/{workoutId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(workoutId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(userId) &&
+                         isValidId(workoutId) &&
+                         incoming().keys().hasAll([
+                           'userId',
+                           'sportType',
+                           'durationSeconds',
+                           'caloriesBurned',
+                           'steps',
+                           'distanceMeters',
+                           'repsCount',
+                           'trackingMode',
+                           'motionActiveSeconds',
+                           'activityDate',
+                           'startedAtMillis',
+                           'endedAtMillis',
+                           'avgFormScore',
+                           'avgSymmetryPercent',
+                           'workoutSubType',
+                           'createdAt',
+                           'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId',
+                           'sportType',
+                           'durationSeconds',
+                           'caloriesBurned',
+                           'steps',
+                           'distanceMeters',
+                           'repsCount',
+                           'trackingMode',
+                           'motionActiveSeconds',
+                           'activityDate',
+                           'startedAtMillis',
+                           'endedAtMillis',
+                           'avgFormScore',
+                           'avgSymmetryPercent',
+                           'routeJson',
+                           'workoutSubType',
+                           'createdAt',
+                           'updatedAt'
+                         ]) &&
+                         incoming().createdAt is timestamp &&
+                         incoming().createdAt <= request.time &&
+                         incoming().updatedAt is timestamp &&
+                         incoming().updatedAt <= request.time &&
+                         isValidWorkoutSession(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(userId) &&
+                         isValidId(workoutId) &&
+                         isValidWorkoutSession(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().updatedAt is timestamp &&
+                         incoming().updatedAt <= request.time &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'sportType',
+                           'durationSeconds',
+                           'caloriesBurned',
+                           'steps',
+                           'distanceMeters',
+                           'repsCount',
+                           'trackingMode',
+                           'motionActiveSeconds',
+                           'activityDate',
+                           'startedAtMillis',
+                           'endedAtMillis',
+                           'avgFormScore',
+                           'avgSymmetryPercent',
+                           'routeJson',
+                           'workoutSubType',
+                           'updatedAt'
+                         ]);
+
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(workoutId);
+      }
+    }
+  }
+}

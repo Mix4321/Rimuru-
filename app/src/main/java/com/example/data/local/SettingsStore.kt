@@ -34,24 +34,24 @@ enum class DetectionSensitivity(
     STRICT(
         thaiLabel = "เข้มงวดสูงสุด",
         description = "กรองสัญญาณสั่นและจุดหลอนเข้มข้น ลดการนับพลาดเกือบเป็นศูนย์",
-        coreConfidence = 0.72f,
-        limbConfidence = 0.64f,
+        coreConfidence = 0.58f,
+        limbConfidence = 0.45f,
         motionDeadzoneScale = 1.18f,
         gpsMaxAccuracyMeters = 20f
     ),
     BALANCED(
         thaiLabel = "สมดุล (แนะนำ)",
         description = "แม่นยำสูงและตอบสนองลื่นไหลสำหรับกีฬาทุกประเภท",
-        coreConfidence = 0.65f,
-        limbConfidence = 0.56f,
+        coreConfidence = 0.48f,
+        limbConfidence = 0.36f,
         motionDeadzoneScale = 1.0f,
         gpsMaxAccuracyMeters = 26f
     ),
     SENSITIVE(
         thaiLabel = "ไวต่อการเคลื่อนไหว",
         description = "เหมาะกับสภาพแสงน้อยหรือท่ายืด/เคลื่อนไหวเบาๆ",
-        coreConfidence = 0.58f,
-        limbConfidence = 0.50f,
+        coreConfidence = 0.38f,
+        limbConfidence = 0.28f,
         motionDeadzoneScale = 0.85f,
         gpsMaxAccuracyMeters = 32f
     );

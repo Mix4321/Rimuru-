@@ -22,8 +22,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -42,14 +43,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
-import androidx.compose.material.icons.rounded.AccessibilityNew
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Balance
 import androidx.compose.material.icons.rounded.Bolt
@@ -66,10 +64,10 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Sensors
-import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -79,12 +77,14 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -92,6 +92,7 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -106,16 +107,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -124,11 +124,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.R
 import com.example.audio.WorkoutVoiceCoach
 import com.example.camera.GeneralExerciseFocus
 import com.example.camera.PoseMotionAnalyzer
 import com.example.camera.PoseOverlayCanvas
+import com.example.camera.PoseSkeletonSnapshot
 import com.example.data.local.AppSettings
 import com.example.data.local.DetectionSensitivity
 import com.example.data.model.SportType
@@ -136,10 +136,6 @@ import com.example.data.model.TrackingMode
 import com.example.domain.DateStreakUtils
 import com.example.sensors.DeviceMotionTracker
 import com.example.sensors.LocationDistanceTracker
-import com.example.share.WorkoutShareHelper
-import com.example.ui.components.MetricTile
-import com.example.ui.components.RouteJsonCodec
-import com.example.ui.components.RouteMapCard
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.EmeraldVibrant
@@ -147,13 +143,10 @@ import com.example.ui.theme.ForestGreen
 import com.example.ui.theme.ForestGreenDeep
 import com.example.ui.theme.MintBright
 import com.example.ui.viewmodel.HiitPhase
-import com.example.ui.viewmodel.HiitPreset
-import com.example.ui.viewmodel.HiitPresets
 import com.example.ui.viewmodel.ManualEffortLevel
 import com.example.ui.viewmodel.WorkoutTimerStyle
 import com.example.ui.viewmodel.WorkoutUiState
 import com.example.ui.viewmodel.WorkoutViewModel
-import com.example.widget.MoveWidgetProvider
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -171,6 +164,7 @@ private fun checkActivityPermission(context: Context): Boolean =
         true
     }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkoutScreen(
     viewModel: WorkoutViewModel,
@@ -198,6 +192,7 @@ fun WorkoutScreen(
 
     var showBelowMinimumDialog by remember { mutableStateOf(false) }
     var showConfirmExitDialog by remember { mutableStateOf(false) }
+    var showAdvancedOptionsSheet by remember { mutableStateOf(false) }
     var selectedExerciseFocus by remember(uiState.sessionId) { mutableStateOf(GeneralExerciseFocus.AUTO) }
 
     val motionTracker = remember(context) {
@@ -246,7 +241,6 @@ fun WorkoutScreen(
         }
     }
 
-    // Activate or stop hardware sensors & GPS cleanly based on current tracking mode & permissions
     LaunchedEffect(
         uiState.trackingMode,
         uiState.locationPermissionGranted,
@@ -300,7 +294,6 @@ fun WorkoutScreen(
         }
     }
 
-    // Initial permission evaluation based on selected mode
     LaunchedEffect(uiState.sessionId) {
         if (uiState.sessionId.isBlank() || uiState.permissionsEvaluated) return@LaunchedEffect
 
@@ -335,7 +328,6 @@ fun WorkoutScreen(
         }
     }
 
-    // Re-check permissions automatically if user returned from Android Settings
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         val cam = checkCameraPermission(context)
         val loc = checkLocationPermission(context)
@@ -348,7 +340,6 @@ fun WorkoutScreen(
         )
     }
 
-    // Persist active workout draft if user leaves app or locks screen mid-workout
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
         viewModel.persistDraftAsync()
     }
@@ -409,9 +400,7 @@ fun WorkoutScreen(
             onDismissRequest = { showConfirmExitDialog = false },
             title = { Text("พักกิจกรรมชั่วคราว?") },
             text = {
-                Text(
-                    "คุณสามารถบันทึกกิจกรรมค้างไว้เพื่อกลับมาทำต่อภายหลัง หรือยกเลิกเซสชันนี้ได้"
-                )
+                Text("คุณสามารถบันทึกกิจกรรมค้างไว้เพื่อกลับมาทำต่อภายหลัง หรือยกเลิกเซสชันนี้ได้")
             },
             confirmButton = {
                 Button(
@@ -442,6 +431,23 @@ fun WorkoutScreen(
         )
     }
 
+    if (showAdvancedOptionsSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showAdvancedOptionsSheet = false },
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            WorkoutAdvancedOptionsSheet(
+                uiState = uiState,
+                onSelectTimerStyle = viewModel::setTimerStyle,
+                onApplyHiitPreset = viewModel::applyHiitPreset,
+                onUpdateCustomHiit = viewModel::updateCustomHiitConfig,
+                onClose = { showAdvancedOptionsSheet = false }
+            )
+        }
+    }
+
     if (uiState.saveOutcome != null && uiState.savedSession != null) {
         PostWorkoutSummaryScreen(
             uiState = uiState,
@@ -449,6 +455,45 @@ fun WorkoutScreen(
             onDone = onExitToDashboard
         )
         return
+    }
+
+    val openAppSettings = {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", context.packageName, null)
+        }
+        context.startActivity(intent)
+    }
+
+    val requestSensorPermissions = {
+        val needed = buildList {
+            if (!uiState.locationPermissionGranted) {
+                add(Manifest.permission.ACCESS_FINE_LOCATION)
+                add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !uiState.activityPermissionGranted) {
+                add(Manifest.permission.ACTIVITY_RECOGNITION)
+            }
+        }
+        if (needed.isNotEmpty()) {
+            multiPermissionLauncher.launch(needed.toTypedArray())
+        } else {
+            openAppSettings()
+        }
+    }
+
+    val onToggleRunClick = {
+        if (uiState.isRunning) viewModel.pauseTimer()
+        else viewModel.startOrResumeTimer()
+    }
+
+    val onFinishClick = {
+        if (uiState.canSaveWorkout) {
+            motionTracker.stop()
+            locationTracker.stop()
+            viewModel.saveWorkout()
+        } else {
+            showBelowMinimumDialog = true
+        }
     }
 
     BoxWithConstraints(
@@ -460,31 +505,34 @@ fun WorkoutScreen(
         val isWide = maxWidth >= 720.dp
 
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top Header
+            // 1. Compact Header (~52.dp)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
                     IconButton(onClick = { showConfirmExitDialog = true }) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = "ย้อนกลับ"
                         )
                     }
-                    Spacer(modifier = Modifier.width(4.dp))
                     Column {
                         Text(
                             text = uiState.sportType.thaiName,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                         Text(
                             text = uiState.trackingMode.thaiLabel,
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
@@ -492,7 +540,7 @@ fun WorkoutScreen(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     IconButton(
                         onClick = viewModel::toggleVoiceCoachMute,
@@ -515,23 +563,26 @@ fun WorkoutScreen(
                         )
                     }
 
-                    if (!uiState.cameraPermissionGranted && uiState.trackingMode != TrackingMode.CAMERA_AI) {
-                        OutlinedButton(
-                            onClick = { cameraOnlyLauncher.launch(Manifest.permission.CAMERA) }
-                        ) {
-                            Icon(Icons.Rounded.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("ใช้กล้อง AI")
-                        }
+                    IconButton(
+                        onClick = { showAdvancedOptionsSheet = true },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("workout_options_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Tune,
+                            contentDescription = "ตั้งค่า HIIT และข้อมูลเพิ่มเติม",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
 
-            // 3-Mode Tracking Selector (Camera AI | Sensor & GPS | Manual)
+            // 2. Compact 3-Mode Tracking Selector
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .padding(horizontal = 16.dp, vertical = 2.dp)
             ) {
                 TrackingMode.entries.forEachIndexed { index, mode ->
                     SegmentedButton(
@@ -569,49 +620,26 @@ fun WorkoutScreen(
                                     TrackingMode.MANUAL -> Icons.Rounded.EditNote
                                 },
                                 contentDescription = null,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(15.dp)
                             )
                         }
                     ) {
                         Text(
                             text = mode.shortLabel,
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelSmall,
                             maxLines = 1
                         )
                     }
                 }
             }
 
-            val openAppSettings = {
-                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.fromParts("package", context.packageName, null)
-                }
-                context.startActivity(intent)
-            }
-
-            val requestSensorPermissions = {
-                val needed = buildList {
-                    if (!uiState.locationPermissionGranted) {
-                        add(Manifest.permission.ACCESS_FINE_LOCATION)
-                        add(Manifest.permission.ACCESS_COARSE_LOCATION)
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !uiState.activityPermissionGranted) {
-                        add(Manifest.permission.ACTIVITY_RECOGNITION)
-                    }
-                }
-                if (needed.isNotEmpty()) {
-                    multiPermissionLauncher.launch(needed.toTypedArray())
-                } else {
-                    openAppSettings()
-                }
-            }
-
+            // General Exercise Focus Selector Chips (Compact row)
             if (uiState.sportType == SportType.GENERAL && uiState.trackingMode == TrackingMode.CAMERA_AI) {
                 LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(GeneralExerciseFocus.entries) { focus ->
                         FilterChip(
@@ -620,7 +648,7 @@ fun WorkoutScreen(
                             label = {
                                 Text(
                                     text = focus.thaiLabel,
-                                    style = MaterialTheme.typography.labelMedium,
+                                    style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             },
@@ -634,11 +662,12 @@ fun WorkoutScreen(
                 }
             }
 
+            // 3. NON-SCROLLING BODY: Camera/Sensor Viewport + Always-Pinned Live Counters & Controls
             if (isWide) {
                 Row(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     TrackingViewportCard(
@@ -651,44 +680,35 @@ fun WorkoutScreen(
                         onRequestSensorPermissions = requestSensorPermissions,
                         onOpenAppSettings = openAppSettings,
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxSize()
+                            .weight(1.1f)
+                            .fillMaxHeight()
                     )
                     Column(
                         modifier = Modifier
-                            .weight(1f)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                            .weight(0.9f)
+                            .fillMaxHeight(),
+                        verticalArrangement = Arrangement.SpaceBetween
                     ) {
-                        WorkoutMetricsAndControls(
+                        PinnedLiveTelemetryDock(
                             uiState = uiState,
                             selectedExerciseFocus = selectedExerciseFocus,
                             onSelectTimerStyle = viewModel::setTimerStyle,
-                            onApplyHiitPreset = viewModel::applyHiitPreset,
-                            onUpdateCustomHiit = viewModel::updateCustomHiitConfig,
-                            onToggleRun = {
-                                if (uiState.isRunning) viewModel.pauseTimer()
-                                else viewModel.startOrResumeTimer()
-                            },
-                            onFinishClick = {
-                                if (uiState.canSaveWorkout) {
-                                    motionTracker.stop()
-                                    locationTracker.stop()
-                                    viewModel.saveWorkout()
-                                } else {
-                                    showBelowMinimumDialog = true
-                                }
-                            }
+                            onOpenOptionsSheet = { showAdvancedOptionsSheet = true },
+                            onToggleRun = onToggleRunClick,
+                            onFinishClick = onFinishClick
                         )
                     }
                 }
             } else {
+                // PORTRAIT PHONE ZERO-SCROLL LAYOUT:
+                // Viewport takes flexible weight(1f) so the bottom telemetry dock + Reps + Controls
+                // are ALWAYS visible without scrolling!
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 20.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     TrackingViewportCard(
                         uiState = uiState,
@@ -701,34 +721,437 @@ fun WorkoutScreen(
                         onOpenAppSettings = openAppSettings,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(
-                                when (uiState.trackingMode) {
-                                    TrackingMode.CAMERA_AI -> 390.dp
-                                    TrackingMode.SENSOR_GPS -> 240.dp
-                                    TrackingMode.MANUAL -> 220.dp
-                                }
-                            )
+                            .weight(1f)
                     )
 
-                    WorkoutMetricsAndControls(
+                    PinnedLiveTelemetryDock(
                         uiState = uiState,
                         selectedExerciseFocus = selectedExerciseFocus,
                         onSelectTimerStyle = viewModel::setTimerStyle,
-                        onApplyHiitPreset = viewModel::applyHiitPreset,
-                        onUpdateCustomHiit = viewModel::updateCustomHiitConfig,
-                        onToggleRun = {
-                            if (uiState.isRunning) viewModel.pauseTimer()
-                            else viewModel.startOrResumeTimer()
-                        },
-                        onFinishClick = {
-                            if (uiState.canSaveWorkout) {
-                                motionTracker.stop()
-                                locationTracker.stop()
-                                viewModel.saveWorkout()
-                            } else {
-                                showBelowMinimumDialog = true
+                        onOpenOptionsSheet = { showAdvancedOptionsSheet = true },
+                        onToggleRun = onToggleRunClick,
+                        onFinishClick = onFinishClick
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PinnedLiveTelemetryDock(
+    uiState: WorkoutUiState,
+    selectedExerciseFocus: GeneralExerciseFocus,
+    onSelectTimerStyle: (WorkoutTimerStyle) -> Unit,
+    onOpenOptionsSheet: () -> Unit,
+    onToggleRun: () -> Unit,
+    onFinishClick: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Unified Telemetry Card: Timer + Mode Switch + ALL Core Live Numbers side-by-side!
+        Card(
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Row 1: Timer Display + Mode Quick Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        if (uiState.timerStyle == WorkoutTimerStyle.HIIT) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.testTag("hiit_live_card")
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (uiState.hiitPhase == HiitPhase.REST) AmberWarm else ForestGreen
+                                ) {
+                                    Text(
+                                        text = "${uiState.hiitPhase.thaiLabel} ${uiState.hiitCurrentRound}/${uiState.hiitTotalRounds}",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                                Text(
+                                    text = if (uiState.hiitPhase == HiitPhase.COMPLETED) "สำเร็จ!" else "${uiState.hiitPhaseRemainingSec} วิ",
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(
+                                text = "${uiState.hiitCircuitLabel} • รวม ${DateStreakUtils.formatDurationClock(uiState.elapsedSeconds)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.testTag("workout_timer_text")
+                            )
+                        } else {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = DateStreakUtils.formatDurationClock(uiState.elapsedSeconds),
+                                    style = MaterialTheme.typography.headlineLarge,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.testTag("workout_timer_text")
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (uiState.canSaveWorkout) {
+                                        EmeraldVibrant.copy(alpha = 0.14f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerLow
+                                    }
+                                ) {
+                                    Text(
+                                        text = if (uiState.canSaveWorkout) {
+                                            "บันทึกได้ทันที"
+                                        } else {
+                                            "${uiState.elapsedSeconds}/${DateStreakUtils.MIN_WORKOUT_SECONDS}วิ"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
                             }
                         }
+                    }
+
+                    // Compact Timer Mode Toggle Pill (Free / HIIT)
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                val nextStyle = if (uiState.timerStyle == WorkoutTimerStyle.FREE) {
+                                    WorkoutTimerStyle.HIIT
+                                } else {
+                                    WorkoutTimerStyle.FREE
+                                }
+                                onSelectTimerStyle(nextStyle)
+                            }
+                            .testTag("timer_style_selector")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (uiState.timerStyle == WorkoutTimerStyle.FREE) Icons.Rounded.Timer else Icons.Rounded.Bolt,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = uiState.timerStyle.thaiLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                // Row 2: ALWAYS-VISIBLE LIVE COUNTERS (Reps / Steps / Distance / Calories / Plank)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (uiState.sportType.supportsReps) {
+                        CompactStatPill(
+                            icon = Icons.Rounded.Repeat,
+                            label = if (uiState.sportType == SportType.JUMP_ROPE) "กระโดด" else "จำนวนครั้ง",
+                            value = "${uiState.repsCount}",
+                            accent = EmeraldVibrant,
+                            highlighted = true,
+                            modifier = Modifier
+                                .weight(1.15f)
+                                .testTag("live_reps_stat")
+                        )
+                    }
+                    if (uiState.sportType.supportsSteps) {
+                        CompactStatPill(
+                            icon = Icons.AutoMirrored.Rounded.DirectionsWalk,
+                            label = "ก้าว",
+                            value = "${uiState.steps}",
+                            accent = EmeraldVibrant,
+                            highlighted = !uiState.sportType.supportsReps,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("live_steps_stat")
+                        )
+                    }
+                    if (uiState.sportType.supportsDistance) {
+                        CompactStatPill(
+                            icon = Icons.Rounded.Route,
+                            label = "ระยะทาง",
+                            value = DateStreakUtils.formatDistanceKm(uiState.distanceMeters),
+                            accent = ForestGreen,
+                            highlighted = false,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    CompactStatPill(
+                        icon = Icons.Rounded.LocalFireDepartment,
+                        label = "แคลอรี",
+                        value = "${uiState.caloriesBurned}",
+                        unit = "kcal",
+                        accent = AmberWarm,
+                        highlighted = false,
+                        modifier = Modifier.weight(0.95f)
+                    )
+                    if (uiState.trackingMode == TrackingMode.CAMERA_AI &&
+                        (selectedExerciseFocus == GeneralExerciseFocus.PLANK || uiState.plankHoldSeconds > 0)
+                    ) {
+                        CompactStatPill(
+                            icon = Icons.Rounded.Timer,
+                            label = "แพลงก์",
+                            value = DateStreakUtils.formatDurationClock(uiState.plankHoldSeconds),
+                            accent = if (uiState.poseSnapshot.isPlankHoldingValid) EmeraldVibrant else AmberWarm,
+                            highlighted = true,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("plank_hold_card")
+                        )
+                    }
+                }
+            }
+        }
+
+        // Ultra-compact 1-line Ghost Pacer / 1km split indicator (tapping opens full view without pushing controls off-screen)
+        if (uiState.latestSplitBanner != null) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = ForestGreenDeep,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Rounded.Speed, contentDescription = null, tint = MintBright, modifier = Modifier.size(16.dp))
+                    Text(
+                        text = uiState.latestSplitBanner,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        } else if (uiState.ghostRival.hasRival) {
+            val ghostAtNow = uiState.ghostRival.expectedProgressAt(uiState.elapsedSeconds)
+            val diff = when {
+                uiState.sportType.supportsDistance && uiState.ghostRival.targetTotalMeters > 0 ->
+                    uiState.distanceMeters - ghostAtNow.meters
+                uiState.sportType.supportsReps && uiState.ghostRival.targetTotalReps > 0 ->
+                    uiState.repsCount - ghostAtNow.reps
+                uiState.sportType.supportsSteps && uiState.ghostRival.targetTotalSteps > 0 ->
+                    uiState.steps - ghostAtNow.steps
+                else -> uiState.caloriesBurned - ghostAtNow.calories
+            }
+            val unit = when {
+                uiState.sportType.supportsDistance && uiState.ghostRival.targetTotalMeters > 0 -> "ม."
+                uiState.sportType.supportsReps && uiState.ghostRival.targetTotalReps > 0 -> "ครั้ง"
+                uiState.sportType.supportsSteps && uiState.ghostRival.targetTotalSteps > 0 -> "ก้าว"
+                else -> "kcal"
+            }
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = ForestGreenDeep,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onOpenOptionsSheet)
+                    .testTag("ghost_pacer_card")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(Icons.Rounded.Bolt, contentDescription = null, tint = MintBright, modifier = Modifier.size(15.dp))
+                        Text(
+                            text = if (diff >= 0) "นำเงา +$diff $unit" else "ตามเงา ${kotlin.math.abs(diff)} $unit",
+                            color = if (diff >= 0) MintBright else AmberWarm,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Text(
+                        text = "แตะดูรายละเอียด",
+                        color = Color.White.copy(alpha = 0.7f),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+        }
+
+        if (uiState.errorMessage != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = uiState.errorMessage,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(10.dp)
+                )
+            }
+        }
+
+        // Pinned Action Controls Row (Always at bottom — Zero Scroll)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Button(
+                onClick = onToggleRun,
+                enabled = !uiState.isSaving,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (uiState.isRunning) AmberWarm else ForestGreen
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(54.dp)
+                    .testTag("workout_pause_resume_button")
+            ) {
+                Icon(
+                    imageVector = if (uiState.isRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    contentDescription = null
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = when {
+                        uiState.isRunning -> "หยุดชั่วคราว"
+                        uiState.hasStartedOnce -> "ทำต่อ"
+                        else -> "เริ่ม"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Button(
+                onClick = onFinishClick,
+                enabled = !uiState.isSaving,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (uiState.canSaveWorkout) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(54.dp)
+                    .testTag("workout_finish_button")
+            ) {
+                if (uiState.isSaving) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (uiState.canSaveWorkout) Icons.Rounded.CheckCircle else Icons.Rounded.Stop,
+                        contentDescription = null
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (uiState.canSaveWorkout) "บันทึกผล" else "จบ",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactStatPill(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    accent: Color,
+    highlighted: Boolean,
+    unit: String? = null,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = if (highlighted) accent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerLow,
+        border = if (highlighted) BorderStroke(1.dp, accent.copy(alpha = 0.45f)) else null,
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(13.dp)
+                )
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = value,
+                    style = if (highlighted) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
+                    color = if (highlighted) accent else MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                if (unit != null) {
+                    Text(
+                        text = unit,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 2.dp)
                     )
                 }
             }
@@ -741,16 +1164,15 @@ private fun TrackingViewportCard(
     uiState: WorkoutUiState,
     sensitivity: DetectionSensitivity,
     exerciseFocus: GeneralExerciseFocus,
-    onMotionFrame: (com.example.camera.PoseSkeletonSnapshot) -> Unit,
+    onMotionFrame: (PoseSkeletonSnapshot) -> Unit,
     onToggleCameraLens: () -> Unit,
     onSelectManualEffort: (ManualEffortLevel) -> Unit,
     onRequestSensorPermissions: () -> Unit,
     onOpenAppSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val currentSensitivityForCard = sensitivity
     Card(
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
         modifier = modifier
     ) {
@@ -780,7 +1202,7 @@ private fun TrackingViewportCard(
                 ) {
                     CameraPosePreview(
                         sportType = uiState.sportType,
-                        sensitivity = currentSensitivityForCard,
+                        sensitivity = sensitivity,
                         exerciseFocus = exerciseFocus,
                         useFrontCamera = uiState.useFrontCamera,
                         relockTick = relockTick,
@@ -794,12 +1216,12 @@ private fun TrackingViewportCard(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Top status pill + subject re-lock & lens toggle
+                    // Top status pill + subject re-lock & lens toggle + Form/Symmetry
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -809,45 +1231,35 @@ private fun TrackingViewportCard(
                             Surface(
                                 shape = RoundedCornerShape(999.dp),
                                 color = when {
-                                    !uiState.isRunning -> Color.Black.copy(alpha = 0.7f)
-                                    uiState.poseSnapshot.isForeignPersonBlocked ->
-                                        AmberWarm.copy(alpha = 0.94f)
-                                    uiState.poseSnapshot.isBodyVisible && uiState.isCurrentlyMoving ->
-                                        EmeraldVibrant.copy(alpha = 0.92f)
-                                    uiState.poseSnapshot.isBodyVisible ->
-                                        ForestGreen.copy(alpha = 0.88f)
+                                    !uiState.isRunning -> Color.Black.copy(alpha = 0.72f)
+                                    uiState.poseSnapshot.isForeignPersonBlocked -> AmberWarm.copy(alpha = 0.94f)
+                                    uiState.poseSnapshot.isBodyVisible && uiState.isCurrentlyMoving -> EmeraldVibrant.copy(alpha = 0.92f)
+                                    uiState.poseSnapshot.isBodyVisible -> ForestGreen.copy(alpha = 0.88f)
                                     else -> Color.Black.copy(alpha = 0.72f)
                                 },
                                 modifier = Modifier.weight(1f, fill = false)
                             ) {
                                 Text(
-                                    text = when {
-                                        !uiState.isRunning -> "หยุดชั่วคราว"
-                                        else -> uiState.poseSnapshot.postureHint
-                                    },
+                                    text = if (!uiState.isRunning) "หยุดชั่วคราว" else uiState.poseSnapshot.postureHint,
                                     color = Color.White,
                                     style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                 )
                             }
 
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
 
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 IconButton(
                                     onClick = { relockTick++ },
                                     modifier = Modifier
                                         .size(48.dp)
                                         .clip(CircleShape)
                                         .background(
-                                            if (uiState.poseSnapshot.isForeignPersonBlocked) {
-                                                AmberWarm.copy(alpha = 0.86f)
-                                            } else {
-                                                Color.Black.copy(alpha = 0.55f)
-                                            }
+                                            if (uiState.poseSnapshot.isForeignPersonBlocked) AmberWarm.copy(alpha = 0.88f)
+                                            else Color.Black.copy(alpha = 0.55f)
                                         )
                                         .testTag("relock_subject_button")
                                 ) {
@@ -875,100 +1287,38 @@ private fun TrackingViewportCard(
                             }
                         }
 
-                        // Subject Lock + AI Form % & Symmetry % Live Badges
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = uiState.poseSnapshot.isBodyVisible ||
-                                uiState.poseSnapshot.isSubjectLocked ||
-                                uiState.poseSnapshot.isForeignPersonBlocked
+                        AnimatedVisibility(
+                            visible = uiState.poseSnapshot.isBodyVisible || uiState.poseSnapshot.isSubjectLocked
                         ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 if (uiState.poseSnapshot.isSubjectLocked) {
                                     Surface(
                                         shape = RoundedCornerShape(999.dp),
-                                        color = if (uiState.poseSnapshot.isForeignPersonBlocked) {
-                                            AmberWarm.copy(alpha = 0.88f)
-                                        } else {
-                                            ForestGreenDeep.copy(alpha = 0.78f)
-                                        },
-                                        border = BorderStroke(
-                                            1.dp,
-                                            if (uiState.poseSnapshot.isForeignPersonBlocked) {
-                                                Color.White.copy(alpha = 0.65f)
-                                            } else {
-                                                MintBright.copy(alpha = 0.6f)
-                                            }
-                                        )
+                                        color = if (uiState.poseSnapshot.isForeignPersonBlocked) AmberWarm.copy(alpha = 0.9f) else ForestGreenDeep.copy(alpha = 0.78f),
+                                        border = BorderStroke(1.dp, MintBright.copy(alpha = 0.55f))
                                     ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.CenterFocusStrong,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(13.dp)
-                                            )
-                                            Text(
-                                                text = if (uiState.poseSnapshot.isForeignPersonBlocked) {
-                                                    "กันคนเดินผ่าน • ล็อกตัวคุณ"
-                                                } else {
-                                                    "ล็อกตัวแล้ว • แตะเพื่อย้ายจุด"
-                                                },
-                                                color = Color.White,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
+                                        Text(
+                                            text = if (uiState.poseSnapshot.isForeignPersonBlocked) "กันคนผ่าน • ล็อกตัวคุณ" else "ล็อกตัวผู้เล่นแล้ว",
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                                        )
                                     }
                                 }
-
                                 if (uiState.poseSnapshot.isBodyVisible) {
                                     Surface(
                                         shape = RoundedCornerShape(999.dp),
                                         color = Color.Black.copy(alpha = 0.58f)
                                     ) {
                                         Row(
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.AutoAwesome,
-                                                contentDescription = null,
-                                                tint = MintBright,
-                                                modifier = Modifier.size(14.dp)
-                                            )
+                                            Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = MintBright, modifier = Modifier.size(13.dp))
                                             Text(
-                                                text = "ฟอร์ม ${uiState.formScorePercent}%",
-                                                color = Color.White,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-
-                                    Surface(
-                                        shape = RoundedCornerShape(999.dp),
-                                        color = Color.Black.copy(alpha = 0.58f)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Balance,
-                                                contentDescription = null,
-                                                tint = if (uiState.symmetryPercent >= 85) MintBright else AmberWarm,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Text(
-                                                text = "สมดุล ${uiState.symmetryPercent}%",
+                                                text = "ฟอร์ม ${uiState.formScorePercent}% • สมดุล ${uiState.symmetryPercent}%",
                                                 color = Color.White,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontWeight = FontWeight.Bold
@@ -980,70 +1330,142 @@ private fun TrackingViewportCard(
                         }
                     }
 
-                    // Bottom alerts (Fatigue Guard or No-body/idle tip)
+                    // Bottom Overlay inside Camera Viewport: Alerts + HUGE Live Rep Counter HUD
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        androidx.compose.animation.AnimatedVisibility(
+                        AnimatedVisibility(
                             visible = uiState.fatigueWarning && uiState.isRunning && uiState.fatigueHint.isNotBlank()
                         ) {
                             Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = Color(0xFFB45309).copy(alpha = 0.94f),
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFFB45309).copy(alpha = 0.92f),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(10.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Bolt,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(18.dp)
-                                    )
+                                    Icon(Icons.Rounded.Bolt, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                                     Text(
                                         text = "Fatigue Guard: ${uiState.fatigueHint}",
                                         color = Color.White,
-                                        style = MaterialTheme.typography.labelMedium,
+                                        style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
                             }
                         }
 
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = uiState.showAdjustCameraTip && uiState.isRunning
-                        ) {
+                        AnimatedVisibility(visible = uiState.showAdjustCameraTip && uiState.isRunning) {
                             Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = AmberWarm.copy(alpha = 0.95f),
+                                shape = RoundedCornerShape(12.dp),
+                                color = AmberWarm.copy(alpha = 0.94f),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(12.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.WarningAmber,
-                                        contentDescription = null,
-                                        tint = Color.White
-                                    )
+                                    Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                                     Text(
                                         text = if (!uiState.poseSnapshot.isBodyVisible) {
                                             "ไม่พบตัวในกล้อง กรุณาตั้งมือถือให้เห็นร่างกายชัดเจน"
                                         } else {
-                                            "พบตัวแล้วแต่ยังนิ่งอยู่ — ขยับร่างกายเพื่อเริ่มนับและเผาผลาญแคลอรี"
+                                            "ขยับร่างกายเพื่อเริ่มนับครั้งและเผาผลาญแคลอรี"
                                         },
                                         color = Color.White,
-                                        style = MaterialTheme.typography.labelLarge
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold
                                     )
+                                }
+                            }
+                        }
+
+                        // Pinned Dark-Glass Big Counter HUD right inside Camera Viewport!
+                        if (uiState.sportType.supportsReps || uiState.sportType.supportsSteps) {
+                            Surface(
+                                shape = RoundedCornerShape(18.dp),
+                                color = ForestGreenDeep.copy(alpha = 0.84f),
+                                border = BorderStroke(1.dp, MintBright.copy(alpha = 0.55f)),
+                                modifier = Modifier.align(Alignment.Start)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (uiState.sportType.supportsReps) Icons.Rounded.Repeat else Icons.AutoMirrored.Rounded.DirectionsWalk,
+                                            contentDescription = null,
+                                            tint = MintBright,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                        Column {
+                                            Text(
+                                                text = when {
+                                                    uiState.sportType == SportType.JUMP_ROPE -> "จำนวนกระโดด"
+                                                    uiState.sportType.supportsReps -> "จำนวนครั้งที่ทำได้"
+                                                    else -> "จำนวนก้าวจริง"
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color.White.copy(alpha = 0.82f)
+                                            )
+                                            Row(
+                                                verticalAlignment = Alignment.Bottom,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (uiState.sportType.supportsReps) "${uiState.repsCount} ครั้ง" else "${uiState.steps} ก้าว",
+                                                    style = MaterialTheme.typography.headlineMedium,
+                                                    color = MintBright,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                if (uiState.sportType.supportsReps && uiState.poseSnapshot.repPhaseLabel.isNotBlank()) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = if (uiState.poseSnapshot.repPhaseProgress >= 0.85f) {
+                                                            EmeraldVibrant.copy(alpha = 0.35f)
+                                                        } else {
+                                                            Color.White.copy(alpha = 0.14f)
+                                                        },
+                                                        modifier = Modifier.padding(bottom = 3.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = uiState.poseSnapshot.repPhaseLabel,
+                                                            color = if (uiState.poseSnapshot.repPhaseProgress >= 0.85f) MintBright else Color.White,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.Bold,
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (uiState.sportType.supportsReps && uiState.poseSnapshot.isBodyVisible) {
+                                        val progress = uiState.poseSnapshot.repPhaseProgress.coerceIn(0f, 1f)
+                                        LinearProgressIndicator(
+                                            progress = { progress },
+                                            color = if (progress >= 0.85f) MintBright else EmeraldVibrant,
+                                            trackColor = Color.White.copy(alpha = 0.18f),
+                                            modifier = Modifier
+                                                .width(164.dp)
+                                                .height(5.dp)
+                                                .clip(RoundedCornerShape(999.dp))
+                                                .testTag("rep_phase_progress_bar")
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1087,11 +1509,10 @@ private fun TrackingViewportCard(
             }
 
             else -> {
-                // Explicit Manual Mode
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(20.dp),
+                        .padding(18.dp),
                     verticalArrangement = Arrangement.SpaceBetween,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
@@ -1112,9 +1533,9 @@ private fun TrackingViewportCard(
                             imageVector = uiState.sportType.icon,
                             contentDescription = null,
                             tint = MintBright,
-                            modifier = Modifier.size(46.dp)
+                            modifier = Modifier.size(44.dp)
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = "เลือกระดับความหนักของการออกกำลังกาย",
                             color = Color.White,
@@ -1187,7 +1608,7 @@ private fun SensorGpsStatusContent(
                         text = when {
                             !uiState.isRunning -> "หยุดชั่วคราว"
                             uiState.isCurrentlyMoving -> "กำลังตรวจจับการเคลื่อนไหวจริง"
-                            else -> "นิ่งอยู่ — ขยับตัวหรือเริ่มเดิน/วิ่ง"
+                            else -> "นิ่งอยู่ — เริ่มขยับตัว"
                         },
                         color = Color.White,
                         style = MaterialTheme.typography.labelMedium
@@ -1216,7 +1637,7 @@ private fun SensorGpsStatusContent(
                                 !gps.hasLocationPermission -> "ไม่มีสิทธิ์ GPS"
                                 !gps.isGpsEnabled -> "GPS ปิดอยู่"
                                 gps.hasFix -> "GPS ±${(gps.accuracyMeters ?: 0f).toInt()}ม."
-                                else -> "กำลังจับสัญญาณ GPS..."
+                                else -> "กำลังจับ GPS..."
                             },
                             color = Color.White,
                             style = MaterialTheme.typography.labelSmall
@@ -1268,7 +1689,7 @@ private fun SensorGpsStatusContent(
                     .clip(RoundedCornerShape(999.dp))
             )
             Text(
-                text = "ระดับแรงสั่นสะเทือน/การเคลื่อนไหวจริง: ${(uiState.currentIntensity * 100).toInt()}%",
+                text = "ระดับการเคลื่อนไหวจริง: ${(uiState.currentIntensity * 100).toInt()}%",
                 color = Color.White.copy(alpha = 0.8f),
                 style = MaterialTheme.typography.labelSmall
             )
@@ -1287,9 +1708,9 @@ private fun SensorGpsStatusContent(
         } else {
             Text(
                 text = if (uiState.sportType.supportsDistance && !gps.hasFix) {
-                    "คำนวณระยะทางจากจำนวนก้าวจริงระหว่างรอสัญญาณ GPS (เหมาะสำหรับในอาคาร/ลู่วิ่ง)"
+                    "คำนวณระยะทางจากจำนวนก้าวจริงระหว่างรอ GPS (เหมาะกับในอาคาร)"
                 } else {
-                    "พกมือถือติดตัวขณะออกกำลังกาย ระบบจะนับก้าว ระยะทาง และแคลอรีจากการเคลื่อนไหวจริงเท่านั้น"
+                    "พกมือถือติดตัวขณะออกกำลังกาย ระบบจะนับก้าว ระยะทาง และแคลอรีจากการเคลื่อนไหวจริง"
                 },
                 color = Color.White.copy(alpha = 0.78f),
                 style = MaterialTheme.typography.bodySmall
@@ -1314,7 +1735,7 @@ private fun CameraPosePreview(
     useFrontCamera: Boolean,
     relockTick: Int,
     tapLockRequest: WorkoutTapLockRequest?,
-    onMotionAnalyzed: (com.example.camera.PoseSkeletonSnapshot) -> Unit,
+    onMotionAnalyzed: (PoseSkeletonSnapshot) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1425,695 +1846,4 @@ private fun CameraPosePreview(
         factory = { previewView },
         modifier = modifier
     )
-}
-
-@Composable
-private fun WorkoutMetricsAndControls(
-    uiState: WorkoutUiState,
-    selectedExerciseFocus: GeneralExerciseFocus,
-    onSelectTimerStyle: (WorkoutTimerStyle) -> Unit,
-    onApplyHiitPreset: (HiitPreset) -> Unit,
-    onUpdateCustomHiit: (workSec: Int, restSec: Int, rounds: Int) -> Unit,
-    onToggleRun: () -> Unit,
-    onFinishClick: () -> Unit
-) {
-    // Timer Mode Selector (Free vs HIIT / Circuit)
-    SingleChoiceSegmentedButtonRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("timer_style_selector")
-    ) {
-        WorkoutTimerStyle.entries.forEachIndexed { index, style ->
-            SegmentedButton(
-                selected = uiState.timerStyle == style,
-                onClick = { onSelectTimerStyle(style) },
-                shape = SegmentedButtonDefaults.itemShape(
-                    index = index,
-                    count = WorkoutTimerStyle.entries.size
-                ),
-                icon = {
-                    Icon(
-                        imageVector = if (style == WorkoutTimerStyle.FREE) Icons.Rounded.Timer else Icons.Rounded.Bolt,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                },
-                modifier = Modifier.testTag("timer_style_${style.name}")
-            ) {
-                Text(style.thaiLabel, style = MaterialTheme.typography.labelLarge)
-            }
-        }
-    }
-
-    if (uiState.timerStyle == WorkoutTimerStyle.HIIT) {
-        // HIIT / Circuit Live Phase Card + Presets
-        val phaseContainer = when (uiState.hiitPhase) {
-            HiitPhase.WORK -> ForestGreen
-            HiitPhase.REST -> Color(0xFFB45309)
-            HiitPhase.COMPLETED -> EmeraldVibrant
-        }
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = phaseContainer),
-            elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("hiit_live_card")
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = Color.White.copy(alpha = 0.2f)
-                    ) {
-                        Text(
-                            text = "รอบ ${uiState.hiitCurrentRound}/${uiState.hiitTotalRounds}",
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                        )
-                    }
-                    Text(
-                        text = uiState.hiitPhase.thaiLabel,
-                        color = MintBright,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                Text(
-                    text = if (uiState.hiitPhase == HiitPhase.COMPLETED) "สำเร็จ!" else "${uiState.hiitPhaseRemainingSec} วิ",
-                    style = MaterialTheme.typography.displayLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = "ท่าปัจจุบัน: ${uiState.hiitCircuitLabel} • เวลารวม ${DateStreakUtils.formatDurationClock(uiState.elapsedSeconds)}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.9f),
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            items(HiitPresets.ALL, key = { it.id }) { preset ->
-                val active = uiState.hiitWorkSeconds == preset.workSec &&
-                    uiState.hiitRestSeconds == preset.restSec &&
-                    uiState.hiitTotalRounds == preset.rounds
-                FilterChip(
-                    selected = active,
-                    onClick = { onApplyHiitPreset(preset) },
-                    label = { Text(preset.titleThai, style = MaterialTheme.typography.labelMedium) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                    )
-                )
-            }
-            item {
-                FilterChip(
-                    selected = false,
-                    onClick = {
-                        onUpdateCustomHiit(
-                            uiState.hiitWorkSeconds + 10,
-                            uiState.hiitRestSeconds,
-                            uiState.hiitTotalRounds
-                        )
-                    },
-                    label = { Text("+10วิ ช่วงฝึก") }
-                )
-            }
-        }
-    } else {
-        // Free-Duration Clock Card
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = "ระยะเวลาออกกำลังกาย (เวลาอิสระ)",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = DateStreakUtils.formatDurationClock(uiState.elapsedSeconds),
-                    style = MaterialTheme.typography.displayLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.testTag("workout_timer_text")
-                )
-
-                Text(
-                    text = if (uiState.canSaveWorkout) {
-                        "โหมดเวลาอิสระ • เคลื่อนไหวจริงแล้ว ${DateStreakUtils.formatDurationClock(uiState.motionActiveSeconds)} (บันทึกผลได้ทันที)"
-                    } else {
-                        "เริ่มเคลื่อนไหวอย่างน้อย ${DateStreakUtils.MIN_WORKOUT_SECONDS} วินาทีเพื่อบันทึกกิจกรรม (${uiState.elapsedSeconds}/${DateStreakUtils.MIN_WORKOUT_SECONDS}วิ)"
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
-
-    // Live Plank Hold Pill when Camera AI tracks Plank
-    if (uiState.trackingMode == TrackingMode.CAMERA_AI &&
-        (selectedExerciseFocus == GeneralExerciseFocus.PLANK || uiState.plankHoldSeconds > 0)
-    ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = if (uiState.poseSnapshot.isPlankHoldingValid) {
-                EmeraldVibrant.copy(alpha = 0.16f)
-            } else {
-                AmberWarm.copy(alpha = 0.16f)
-            },
-            border = BorderStroke(
-                1.dp,
-                if (uiState.poseSnapshot.isPlankHoldingValid) EmeraldVibrant else AmberWarm
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("plank_hold_card")
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = if (uiState.poseSnapshot.isPlankHoldingValid) {
-                        "แกนกลางตรงดีมาก — กำลังจับเวลาแพลงก์"
-                    } else {
-                        "จัดลำตัวให้ตรงเพื่อจับเวลาแพลงก์"
-                    },
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = DateStreakUtils.formatDurationClock(uiState.plankHoldSeconds),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-    }
-
-    // Latest 1km Pace Split Alert Banner
-    if (uiState.latestSplitBanner != null) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = ForestGreenDeep,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(Icons.Rounded.Speed, contentDescription = null, tint = MintBright)
-                Text(
-                    text = uiState.latestSplitBanner!!,
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-    }
-
-    // Ghost Pacer Duel HUD when user has a past best workout for this sport
-    if (uiState.ghostRival.hasRival) {
-        GhostPacerDuelCard(uiState = uiState)
-    }
-
-    // Symmetry advice chip when Camera AI sees posture imbalance
-    if (uiState.trackingMode == TrackingMode.CAMERA_AI &&
-        uiState.poseSnapshot.isBodyVisible &&
-        uiState.symmetryHint.isNotBlank() &&
-        uiState.symmetryPercent < 86
-    ) {
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Balance,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp)
-                )
-                Text(
-                    text = "AI โค้ช: ${uiState.symmetryHint}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-    }
-
-    // Live Real Metrics Row
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        MetricTile(
-            icon = Icons.Rounded.LocalFireDepartment,
-            label = "แคลอรี",
-            value = "${uiState.caloriesBurned} kcal",
-            accentColor = AmberWarm,
-            modifier = Modifier.weight(1f)
-        )
-        if (uiState.sportType.supportsSteps) {
-            MetricTile(
-                icon = Icons.AutoMirrored.Rounded.DirectionsWalk,
-                label = "จำนวนก้าว",
-                value = "${uiState.steps}",
-                accentColor = EmeraldVibrant,
-                modifier = Modifier.weight(1f)
-            )
-        }
-        if (uiState.sportType.supportsReps) {
-            MetricTile(
-                icon = Icons.Rounded.Repeat,
-                label = if (uiState.sportType.name == "JUMP_ROPE") "กระโดด" else "จำนวนครั้ง",
-                value = "${uiState.repsCount}",
-                accentColor = EmeraldVibrant,
-                modifier = Modifier.weight(1f)
-            )
-        }
-        if (uiState.sportType.supportsDistance) {
-            MetricTile(
-                icon = Icons.Rounded.Route,
-                label = "ระยะทาง",
-                value = DateStreakUtils.formatDistanceKm(uiState.distanceMeters),
-                accentColor = ForestGreen,
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-
-    if (uiState.routePoints.size >= 2) {
-        RouteMapCard(
-            routePoints = uiState.routePoints,
-            distanceMeters = uiState.distanceMeters,
-            durationSeconds = uiState.elapsedSeconds,
-            mapHeight = 148.dp
-        )
-    }
-
-    if (uiState.errorMessage != null) {
-        Surface(
-            color = MaterialTheme.colorScheme.errorContainer,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = uiState.errorMessage!!,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(12.dp)
-            )
-        }
-    }
-
-    // Controls
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Button(
-            onClick = onToggleRun,
-            enabled = !uiState.isSaving,
-            shape = RoundedCornerShape(18.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (uiState.isRunning) AmberWarm else ForestGreen
-            ),
-            modifier = Modifier
-                .weight(1f)
-                .height(58.dp)
-                .testTag("workout_pause_resume_button")
-        ) {
-            Icon(
-                imageVector = if (uiState.isRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                contentDescription = null
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = when {
-                    uiState.isRunning -> "หยุดชั่วคราว"
-                    uiState.hasStartedOnce -> "ทำต่อ"
-                    else -> "เริ่ม"
-                },
-                style = MaterialTheme.typography.titleMedium
-            )
-        }
-
-        Button(
-            onClick = onFinishClick,
-            enabled = !uiState.isSaving,
-            shape = RoundedCornerShape(18.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = if (uiState.canSaveWorkout) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
-            ),
-            modifier = Modifier
-                .weight(1f)
-                .height(58.dp)
-                .testTag("workout_finish_button")
-        ) {
-            if (uiState.isSaving) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    color = Color.White,
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Icon(
-                    imageVector = if (uiState.canSaveWorkout) Icons.Rounded.CheckCircle else Icons.Rounded.Stop,
-                    contentDescription = null
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = if (uiState.canSaveWorkout) "บันทึกกิจกรรม" else "จบกิจกรรม",
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun GhostPacerDuelCard(uiState: WorkoutUiState) {
-    val ghostAtNow = uiState.ghostRival.expectedProgressAt(uiState.elapsedSeconds)
-    val sport = uiState.sportType
-
-    val (currentVal, ghostVal, unitLabel) = when {
-        sport.supportsDistance && uiState.ghostRival.targetTotalMeters > 0 ->
-            Triple(uiState.distanceMeters, ghostAtNow.meters, "ม.")
-        sport.supportsReps && uiState.ghostRival.targetTotalReps > 0 ->
-            Triple(uiState.repsCount, ghostAtNow.reps, "ครั้ง")
-        sport.supportsSteps && uiState.ghostRival.targetTotalSteps > 0 ->
-            Triple(uiState.steps, ghostAtNow.steps, "ก้าว")
-        else ->
-            Triple(uiState.caloriesBurned, ghostAtNow.calories, "kcal")
-    }
-
-    val diff = currentVal - ghostVal
-    val isAhead = diff >= 0
-    val duelRatio = when {
-        ghostVal <= 0 && currentVal <= 0 -> 0.5f
-        ghostVal <= 0 -> 0.85f
-        else -> (0.5f + ((diff.toFloat() / maxOf(ghostVal, 10)) * 0.45f)).coerceIn(0.08f, 0.96f)
-    }
-
-    Card(
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("ghost_pacer_card")
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    Brush.horizontalGradient(
-                        colors = listOf(ForestGreenDeep, ForestGreen)
-                    )
-                )
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Bolt,
-                        contentDescription = null,
-                        tint = MintBright,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Ghost Pacer • แข่งกับเงาสถิติสูงสุด (${uiState.ghostRival.rivalDateLabel})",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = if (isAhead) "คุณนำหน้าเงาอยู่ +$diff $unitLabel" else "ตามหลังเงา ${kotlin.math.abs(diff)} $unitLabel",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (isAhead) MintBright else AmberWarm,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "เงาตอนนี้: $ghostVal $unitLabel",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.78f)
-                )
-            }
-
-            LinearProgressIndicator(
-                progress = { duelRatio },
-                color = if (isAhead) MintBright else AmberWarm,
-                trackColor = Color.White.copy(alpha = 0.2f),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(999.dp))
-            )
-        }
-    }
-}
-
-@Composable
-private fun PostWorkoutSummaryScreen(
-    uiState: WorkoutUiState,
-    onStartCoolDown: () -> Unit,
-    onDone: () -> Unit
-) {
-    val context = LocalContext.current
-    val session = uiState.savedSession!!
-    val outcome = uiState.saveOutcome!!
-    val routePoints = remember(session.routeJson) { RouteJsonCodec.decode(session.routeJson) }
-
-    LaunchedEffect(session.id) {
-        MoveWidgetProvider.refreshAllWidgets(context)
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Card(
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(22.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.img_goal_badge),
-                    contentDescription = stringResource(R.string.goal_badge_desc),
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(86.dp)
-                        .clip(RoundedCornerShape(22.dp))
-                )
-
-                Text(
-                    text = "บันทึกกิจกรรมสำเร็จ!",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = "${session.sport.thaiName} • ${DateStreakUtils.formatMinutesThai(session.durationSeconds)}",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    MetricTile(
-                        icon = Icons.Rounded.LocalFireDepartment,
-                        label = "เผาผลาญ",
-                        value = "${session.caloriesBurned} kcal",
-                        accentColor = AmberWarm,
-                        modifier = Modifier.weight(1f)
-                    )
-                    MetricTile(
-                        icon = Icons.Rounded.LocalFireDepartment,
-                        label = "Streak ล่าสุด",
-                        value = "${outcome.updatedStreak.currentStreak} วัน",
-                        accentColor = EmeraldVibrant,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                if (session.avgFormScore > 0 || session.repsCount > 0 || session.distanceMeters > 0) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        if (session.repsCount > 0) {
-                            MetricTile(
-                                icon = Icons.Rounded.Repeat,
-                                label = if (session.sport == SportType.JUMP_ROPE) "กระโดด" else "จำนวนครั้ง",
-                                value = "${session.repsCount}",
-                                accentColor = ForestGreen,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        if (session.distanceMeters > 0) {
-                            MetricTile(
-                                icon = Icons.Rounded.Route,
-                                label = "ระยะทาง",
-                                value = DateStreakUtils.formatDistanceKm(session.distanceMeters),
-                                accentColor = ForestGreen,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        if (session.avgFormScore > 0) {
-                            MetricTile(
-                                icon = Icons.Rounded.AutoAwesome,
-                                label = "AI ฟอร์มเฉลี่ย",
-                                value = "${session.avgFormScore}%",
-                                accentColor = EmeraldVibrant,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                }
-
-                if (routePoints.size >= 2) {
-                    RouteMapCard(
-                        routePoints = routePoints,
-                        distanceMeters = session.distanceMeters,
-                        durationSeconds = session.durationSeconds,
-                        mapHeight = 152.dp
-                    )
-                }
-
-                Text(
-                    text = outcome.updatedStreak.statusMessageThai,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.Center
-                )
-
-                Button(
-                    onClick = {
-                        WorkoutShareHelper.shareWorkoutCard(
-                            context = context,
-                            session = session,
-                            streakDays = outcome.updatedStreak.currentStreak
-                        )
-                    },
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ForestGreen),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("share_workout_button")
-                ) {
-                    Icon(Icons.Rounded.Share, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "แชร์การ์ดสรุปผล (PNG)",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                Button(
-                    onClick = onStartCoolDown,
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldVibrant),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("post_workout_cooldown_button")
-                ) {
-                    Icon(Icons.Rounded.AccessibilityNew, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "ยืดคลายกล้ามเนื้อหลังเล่น (Cool-Down)",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                OutlinedButton(
-                    onClick = onDone,
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .testTag("post_workout_done_button")
-                ) {
-                    Text("กลับหน้าหลัก", style = MaterialTheme.typography.titleMedium)
-                }
-            }
-        }
-    }
 }

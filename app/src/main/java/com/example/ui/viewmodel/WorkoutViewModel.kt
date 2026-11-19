@@ -4,6 +4,7 @@ import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.camera.PoseSkeletonSnapshot
+import com.example.data.firebase.MoveCloudRepository
 import com.example.data.firebase.WorkoutDraftStore
 import com.example.data.local.AppSettings
 import com.example.data.local.MoveRepository
@@ -151,7 +152,9 @@ data class WorkoutUiState(
 
 class WorkoutViewModel(
     private val repository: MoveRepository,
-    private val draftStore: WorkoutDraftStore
+    private val draftStore: WorkoutDraftStore,
+    private val cloudRepository: MoveCloudRepository? = null,
+    private val currentUserId: String = ""
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(WorkoutUiState())
@@ -761,6 +764,15 @@ class WorkoutViewModel(
             )
             result.onSuccess { outcome ->
                 draftStore.clearDraft()
+                if (cloudRepository != null && currentUserId.isNotBlank()) {
+                    cloudRepository.saveWorkout(currentUserId, session.copy(userId = currentUserId))
+                    cloudRepository.syncStreakFields(
+                        userId = currentUserId,
+                        currentStreak = outcome.updatedStreak.currentStreak,
+                        longestStreak = outcome.updatedStreak.longestStreak,
+                        lastActiveDate = outcome.updatedStreak.lastActiveDate
+                    )
+                }
                 _uiState.update {
                     it.copy(
                         isSaving = false,

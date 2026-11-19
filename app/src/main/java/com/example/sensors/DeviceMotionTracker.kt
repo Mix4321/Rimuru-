@@ -18,6 +18,7 @@ data class SensorMotionSnapshot(
     val isMoving: Boolean = false,
     val motionIntensity: Float = 0f,
     val hasHardwareStepSensor: Boolean = false,
+    val hasGyroShakeGuard: Boolean = false,
     val sensorSourceLabel: String = "เซนเซอร์ตรวจจับการเคลื่อนไหว"
 )
 
@@ -36,9 +37,11 @@ class DeviceMotionTracker(
     private val linearAccelSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
     private val rawAccelSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private val gravitySensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
+    private val gyroscopeSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
 
     private var isStarted = false
     private var usingHardwareStepSensor = false
+    private var usingGyroGuard = false
     private var lastCounterTotal: Float? = null
 
     // Gravity orientation vector so vertical jump/gait impulses are separated from pocket sway
@@ -49,8 +52,10 @@ class DeviceMotionTracker(
     private var lastAccelStepMillis = 0L
     private var wasBelowRepThreshold = true
     private var lastRepMillis = 0L
+    private var lastHighGyroTwistMillis = 0L
 
     private var smoothedAccelMag = 0f
+    private var verticalDcFloor = 0f
     private var lastMotionPublishMillis = 0L
 
     fun hasActivityRecognitionPermission(): Boolean {
@@ -69,6 +74,8 @@ class DeviceMotionTracker(
         lastCounterTotal = null
         gravityInitialized = false
         smoothedAccelMag = 0f
+        verticalDcFloor = 0f
+        lastHighGyroTwistMillis = 0L
         wasBelowStepThreshold = true
         wasBelowRepThreshold = true
 
@@ -79,28 +86,36 @@ class DeviceMotionTracker(
         if (canUseStepSensor) {
             when {
                 stepDetectorSensor != null -> {
+                    // maxReportLatencyUs = 0 disables hardware FIFO batching for zero-lag step counting
                     usingHardwareStepSensor = sensorManager.registerListener(
                         this,
                         stepDetectorSensor,
-                        SensorManager.SENSOR_DELAY_GAME
+                        SensorManager.SENSOR_DELAY_FASTEST,
+                        0
                     )
                 }
                 stepCounterSensor != null -> {
                     usingHardwareStepSensor = sensorManager.registerListener(
                         this,
                         stepCounterSensor,
-                        SensorManager.SENSOR_DELAY_UI
+                        SensorManager.SENSOR_DELAY_GAME,
+                        0
                     )
                 }
             }
         }
 
         if (gravitySensor != null) {
-            sensorManager.registerListener(this, gravitySensor, SensorManager.SENSOR_DELAY_GAME)
+            sensorManager.registerListener(this, gravitySensor, SensorManager.SENSOR_DELAY_GAME, 0)
+        }
+        usingGyroGuard = if (gyroscopeSensor != null) {
+            sensorManager.registerListener(this, gyroscopeSensor, SensorManager.SENSOR_DELAY_GAME, 0)
+        } else {
+            false
         }
         val motionSensor = linearAccelSensor ?: rawAccelSensor
         if (motionSensor != null) {
-            sensorManager.registerListener(this, motionSensor, SensorManager.SENSOR_DELAY_GAME)
+            sensorManager.registerListener(this, motionSensor, SensorManager.SENSOR_DELAY_GAME, 0)
         }
         // Always register raw accelerometer gently if using linearAccel without dedicated gravity sensor
         if (linearAccelSensor != null && gravitySensor == null && rawAccelSensor != null) {
@@ -141,6 +156,17 @@ class DeviceMotionTracker(
                     if (delta in 1..100) {
                         onStepDetected(delta)
                     }
+                }
+            }
+
+            Sensor.TYPE_GYROSCOPE -> {
+                val wx = event.values[0]
+                val wy = event.values[1]
+                val wz = event.values[2]
+                val gyroMag = sqrt(wx * wx + wy * wy + wz * wz)
+                // Suppress sudden hand twist / pickup spikes (> ~205 deg/s) from faking steps or jumps
+                if (gyroMag > 3.6f) {
+                    lastHighGyroTwistMillis = now
                 }
             }
 
@@ -199,66 +225,70 @@ class DeviceMotionTracker(
         sensitivity: DetectionSensitivity,
         now: Long
     ) {
-        smoothedAccelMag = smoothedAccelMag * 0.82f + totalMag * 0.18f
+        smoothedAccelMag = smoothedAccelMag * 0.70f + totalMag * 0.30f
+        verticalDcFloor = verticalDcFloor * 0.96f + verticalMag.coerceAtMost(1.2f) * 0.04f
+        val dynamicVertical = (verticalMag - verticalDcFloor * 0.65f).coerceAtLeast(0f)
         val scale = sensitivity.motionDeadzoneScale
+        val gyroCalm = !usingGyroGuard || (now - lastHighGyroTwistMillis) > 360L
 
         // Fallback step detection ONLY for step-supported sports when hardware pedometer isn't active
         if (!usingHardwareStepSensor && sport.supportsSteps) {
             val minIntervalMs = when (sport) {
-                SportType.WALKING -> 360L
-                SportType.RUNNING -> 210L
-                else -> 240L
+                SportType.WALKING -> 310L
+                SportType.RUNNING -> 190L
+                else -> 220L
             }
             val peakThreshold = when (sport) {
-                SportType.WALKING -> 2.15f * scale
-                else -> 2.85f * scale
+                SportType.WALKING -> 1.75f * scale
+                else -> 2.35f * scale
             }
-            val lowThreshold = 1.05f * scale
+            val lowThreshold = 0.85f * scale
 
-            if (verticalMag < lowThreshold) {
+            if (dynamicVertical < lowThreshold) {
                 wasBelowStepThreshold = true
-            } else if (wasBelowStepThreshold && verticalMag > peakThreshold && (now - lastAccelStepMillis) >= minIntervalMs) {
+            } else if (wasBelowStepThreshold && gyroCalm && dynamicVertical > peakThreshold && (now - lastAccelStepMillis) >= minIntervalMs) {
                 wasBelowStepThreshold = false
                 lastAccelStepMillis = now
                 onStepDetected(1)
             }
         }
 
-        // Sport-specific rep / jump peak detection using gravity-aligned vertical axis
+        // Sport-specific rep / jump peak detection using gravity-aligned vertical axis + Gyro shake guard
         if (sport.supportsReps) {
             val (lowThresh, highThresh, minRepMs) = when (sport) {
-                SportType.JUMP_ROPE -> Triple(1.6f * scale, 5.4f * scale, 260L)
-                SportType.BADMINTON -> Triple(1.4f * scale, 4.4f * scale, 350L)
-                else -> Triple(1.5f * scale, 4.2f * scale, 420L)
+                SportType.JUMP_ROPE -> Triple(1.35f * scale, 4.4f * scale, 220L)
+                SportType.BADMINTON -> Triple(1.20f * scale, 3.7f * scale, 310L)
+                else -> Triple(1.30f * scale, 3.6f * scale, 360L)
             }
-            if (verticalMag < lowThresh) {
+            if (dynamicVertical < lowThresh) {
                 wasBelowRepThreshold = true
-            } else if (wasBelowRepThreshold && verticalMag > highThresh && (now - lastRepMillis) >= minRepMs) {
+            } else if (wasBelowRepThreshold && gyroCalm && dynamicVertical > highThresh && (now - lastRepMillis) >= minRepMs) {
                 wasBelowRepThreshold = false
                 lastRepMillis = now
                 onJumpRepDetected(1)
             }
         }
 
-        if (now - lastMotionPublishMillis >= 220L) {
+        if (now - lastMotionPublishMillis >= 150L) {
             lastMotionPublishMillis = now
             val movingFloor = when (sport) {
-                SportType.CYCLING -> 0.42f * scale
-                SportType.WALKING -> 0.55f * scale
-                else -> 0.68f * scale
+                SportType.CYCLING -> 0.35f * scale
+                SportType.WALKING -> 0.44f * scale
+                else -> 0.54f * scale
             }
-            val isMoving = smoothedAccelMag > movingFloor
-            val intensity = ((smoothedAccelMag - movingFloor * 0.6f) / 4.4f).coerceIn(0f, 1f)
+            val isMoving = smoothedAccelMag > movingFloor && gyroCalm
+            val intensity = ((smoothedAccelMag - movingFloor * 0.6f) / 4.2f).coerceIn(0f, 1f)
             publishSnapshot(isMoving = isMoving, intensity = if (isMoving) intensity else 0f)
         }
     }
 
     private fun publishSnapshot(isMoving: Boolean, intensity: Float) {
         val sport = sportProvider()
+        val gyroSuffix = if (usingGyroGuard) " + กันสั่น Gyro" else ""
         val label = when {
-            sport == SportType.CYCLING -> "GPS จักรยาน + วัดจังหวะปั่น"
-            usingHardwareStepSensor -> "เซนเซอร์นับก้าวฮาร์ดแวร์ + แกนความเร่ง (${sport.thaiName})"
-            linearAccelSensor != null || rawAccelSensor != null -> "วัดแรงแกนดิ่ง (${sport.thaiName})"
+            sport == SportType.CYCLING -> "GPS จักรยาน + วัดจังหวะปั่น$gyroSuffix"
+            usingHardwareStepSensor -> "นับก้าวฮาร์ดแวร์แม่นยำสูง$gyroSuffix"
+            linearAccelSensor != null || rawAccelSensor != null -> "วัดแรงแกนดิ่ง (${sport.thaiName})$gyroSuffix"
             else -> "ไม่พบเซนเซอร์เคลื่อนไหวในอุปกรณ์"
         }
         onMotionStateChanged(
@@ -266,6 +296,7 @@ class DeviceMotionTracker(
                 isMoving = isMoving,
                 motionIntensity = intensity,
                 hasHardwareStepSensor = usingHardwareStepSensor,
+                hasGyroShakeGuard = usingGyroGuard,
                 sensorSourceLabel = label
             )
         )

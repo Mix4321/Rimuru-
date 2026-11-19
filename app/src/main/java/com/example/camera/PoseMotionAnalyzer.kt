@@ -22,13 +22,15 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseDetection
 import com.google.mlkit.vision.pose.PoseLandmark
-import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
+import com.google.mlkit.vision.pose.accurate.AccuratePoseDetectorOptions
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 enum class GeneralExerciseFocus(val thaiLabel: String) {
     AUTO("AI อัตโนมัติ"),
@@ -38,6 +40,77 @@ enum class GeneralExerciseFocus(val thaiLabel: String) {
     SITUP("ซิทอัพ"),
     PLANK("แพลงก์จับเวลา"),
     JUMPING_JACK("กระโดดตบ")
+}
+
+data class Point3D(
+    val x: Float,
+    val y: Float,
+    val z: Float
+)
+
+/**
+ * Adaptive One-Euro Filter (Casiez et al.) tuned per body-scale unit:
+ * eliminates stationary landmark jitter while keeping zero phase lag on explosive reps & jumps.
+ */
+internal class OneEuroFilter1D(
+    private val minCutoff: Float = 1.6f,
+    private val beta: Float = 0.045f,
+    private val dCutoff: Float = 1.0f
+) {
+    private var hasPrev = false
+    private var xPrev = 0f
+    private var dxPrev = 0f
+
+    fun filter(value: Float, dtSec: Float, speedScale: Float = 1f): Float {
+        if (!hasPrev) {
+            hasPrev = true
+            xPrev = value
+            dxPrev = 0f
+            return value
+        }
+        val te = dtSec.coerceIn(0.005f, 0.25f)
+        val dx = (value - xPrev) / te
+        val aD = smoothingAlpha(te, dCutoff)
+        val dxHat = aD * dx + (1f - aD) * dxPrev
+        val normSpeed = abs(dxHat) / speedScale.coerceAtLeast(1f)
+        val cutoff = minCutoff + beta * normSpeed
+        val a = smoothingAlpha(te, cutoff)
+        val xHat = a * value + (1f - a) * xPrev
+        xPrev = xHat
+        dxPrev = dxHat
+        return xHat
+    }
+
+    fun reset() {
+        hasPrev = false
+        xPrev = 0f
+        dxPrev = 0f
+    }
+
+    private fun smoothingAlpha(te: Float, cutoff: Float): Float {
+        val tau = 1f / (2f * PI.toFloat() * cutoff.coerceAtLeast(0.05f))
+        return 1f / (1f + tau / te)
+    }
+}
+
+internal class OneEuroFilter3D(
+    minCutoff: Float = 1.6f,
+    beta: Float = 0.045f,
+    dCutoff: Float = 1.0f
+) {
+    private val fx = OneEuroFilter1D(minCutoff, beta, dCutoff)
+    private val fy = OneEuroFilter1D(minCutoff, beta, dCutoff)
+    private val fz = OneEuroFilter1D(minCutoff * 0.85f, beta * 0.85f, dCutoff)
+
+    fun filter(p: Point3D, dtSec: Float, bodyScale: Float): Point3D {
+        // Scale speed sensitivity by normalized body scale (in px) * 100 so beta behaves identically near & far
+        val normDivisor = (bodyScale * 0.01f).coerceAtLeast(0.5f)
+        return Point3D(
+            x = fx.filter(p.x, dtSec, normDivisor),
+            y = fy.filter(p.y, dtSec, normDivisor),
+            z = fz.filter(p.z, dtSec, normDivisor)
+        )
+    }
 }
 
 data class PoseSkeletonSnapshot(
@@ -50,6 +123,8 @@ data class PoseSkeletonSnapshot(
     val motionIntensity: Float = 0f,
     val stepDelta: Int = 0,
     val repDelta: Int = 0,
+    val repPhaseProgress: Float = 0f,
+    val repPhaseLabel: String = "",
     val isPlankHoldingValid: Boolean = false,
     val visibleJointCount: Int = 0,
     val confidencePercent: Int = 0,
@@ -234,15 +309,29 @@ internal class SubjectAnchorTracker {
         // Already locked: check continuity against locked anchor!
         val distFromAnchor = hypot(centerX - anchorCenterX, centerY - anchorCenterY)
         val scaleRatio = bodyScale / anchorScale.coerceAtLeast(24f)
-        val maxDrift = (anchorScale * 1.65f).coerceAtLeast(imgW * 0.24f)
-        val suddenTeleport = distFromAnchor > maxDrift ||
-            abs(centerX - anchorCenterX) > anchorScale * 1.45f ||
-            scaleRatio !in 0.56f..1.68f
+        val dxFromAnchor = abs(centerX - anchorCenterX)
+        val dyFromAnchor = abs(centerY - anchorCenterY)
+
+        // Allow vertical posture transitions (standing -> squat / floor push-up / sit-up) in the same horizontal lane
+        val sameHorizontalLane = dxFromAnchor <= max(anchorScale * 1.15f, imgW * 0.18f)
+        val maxHorizontalDrift = max(anchorScale * 1.45f, imgW * 0.24f)
+        val maxVerticalDrift = if (sameHorizontalLane) {
+            max(anchorScale * 2.75f, imgH * 0.45f)
+        } else {
+            max(anchorScale * 1.65f, imgH * 0.24f)
+        }
+        val minScaleAllowed = if (sameHorizontalLane) 0.34f else 0.56f
+        val maxScaleAllowed = 1.68f
+
+        val suddenTeleport = dxFromAnchor > maxHorizontalDrift ||
+            dyFromAnchor > maxVerticalDrift ||
+            (!sameHorizontalLane && distFromAnchor > max(anchorScale * 1.65f, imgW * 0.24f)) ||
+            scaleRatio !in minScaleAllowed..maxScaleAllowed
 
         if (suddenTeleport) {
             // Foreign person or large object hijacked ML Kit!
-            // If locked athlete has been gone for > 4.2s continuously, allow re-acquiring cleanly.
-            if (lastValidSubjectSeenMs > 0L && (now - lastValidSubjectSeenMs) > 4200L) {
+            // If locked athlete has been gone for > 2.4s continuously, allow re-acquiring cleanly.
+            if (lastValidSubjectSeenMs > 0L && (now - lastValidSubjectSeenMs) > 2400L) {
                 isLocked = false
                 candidateStreak = 1
                 lastCandidateX = centerX
@@ -252,15 +341,15 @@ internal class SubjectAnchorTracker {
                 return true
             }
             lastForeignBlockedMs = now
-            // Engage active ROI crop around the locked athlete for the next ~22 frames!
-            roiFocusFramesRemaining = 22
+            // Engage active ROI crop around the locked athlete for the next ~20 frames
+            roiFocusFramesRemaining = 20
             return false
         }
 
-        // Valid locked user frame: gently adapt anchor to track natural movement
-        anchorCenterX = anchorCenterX * 0.90f + centerX * 0.10f
-        anchorCenterY = anchorCenterY * 0.90f + centerY * 0.10f
-        anchorScale = anchorScale * 0.92f + bodyScale * 0.08f
+        // Valid locked user frame: track vertical posture changes slightly faster than horizontal drift
+        anchorCenterX = anchorCenterX * 0.86f + centerX * 0.14f
+        anchorCenterY = anchorCenterY * 0.80f + centerY * 0.20f
+        anchorScale = anchorScale * 0.90f + bodyScale * 0.10f
         lastValidSubjectSeenMs = now
         return true
     }
@@ -312,6 +401,8 @@ internal fun extractUprightRoiCrop(
 internal data class RepEvalOutput(
     val stepDelta: Int = 0,
     val repDelta: Int = 0,
+    val repPhaseProgress: Float = 0f,
+    val repPhaseLabel: String = "",
     val postureHint: String = "",
     val exerciseTag: String = "",
     val repAmplitude: Float = 0f,
@@ -367,6 +458,11 @@ internal class BiomechanicalRepEngine {
     private var swingState: Int = 0
     private var pedalState: Int = 0
 
+    // Sticky AUTO posture hysteresis (prevents flickering mid-rep between exercises)
+    private var activeAutoTag: String = ""
+    private var pendingAutoTag: String = ""
+    private var pendingAutoStreak: Int = 0
+
     var lastRepMillis: Long = 0L
         private set
     var currentRepPeakAmplitude: Float = 0f
@@ -402,6 +498,9 @@ internal class BiomechanicalRepEngine {
         prevRightLegY = null
         swingState = 0
         pedalState = 0
+        activeAutoTag = ""
+        pendingAutoTag = ""
+        pendingAutoStreak = 0
         lastRepMillis = 0L
         currentRepPeakAmplitude = 0f
         stepIntervalHistory.clear()
@@ -420,6 +519,9 @@ internal class BiomechanicalRepEngine {
         jackState = 0
         swingState = 0
         pedalState = 0
+        activeAutoTag = ""
+        pendingAutoTag = ""
+        pendingAutoStreak = 0
     }
 
     fun evaluate(
@@ -429,14 +531,18 @@ internal class BiomechanicalRepEngine {
         bodyScale: Float,
         isWholeBodyMoving: Boolean,
         sensitivity: DetectionSensitivity,
-        now: Long
+        now: Long,
+        points3D: Map<Int, Point3D> = emptyMap(),
+        confidences: Map<Int, Float> = emptyMap()
     ): RepEvalOutput {
         val plankDetected = isPushUpPlankPosture(points, bodyScale, strict = (focus != GeneralExerciseFocus.PUSHUP))
         return when (sport) {
             SportType.JUMP_ROPE -> {
-                val (rep, hint) = detectJumpRope(points, bodyScale, sensitivity, now)
+                val (rep, hint, progress) = detectJumpRopeDetailed(points, bodyScale, sensitivity, now)
                 RepEvalOutput(
                     repDelta = rep,
+                    repPhaseProgress = progress,
+                    repPhaseLabel = if (jumpState == 1) "ลอยตัว!" else if (progress > 0.3f) "กำลังดีดตัว" else "",
                     postureHint = hint,
                     exerciseTag = "กระโดดเชือก",
                     repAmplitude = currentRepPeakAmplitude
@@ -478,9 +584,9 @@ internal class BiomechanicalRepEngine {
                     minIntervalMs = 220L,
                     now = now
                 )
-                val (jumpRep, _) = detectJumpRope(points, bodyScale, sensitivity, now)
+                val (jumpRep, _, progress) = detectJumpRopeDetailed(points, bodyScale, sensitivity, now)
                 val hint = if (isWholeBodyMoving) "บาสเกตบอล: จับฟุตเวิร์ก & จังหวะกระโดด" else "บาสเกตบอล: พร้อมจับท่าทาง"
-                RepEvalOutput(stepDelta = steps, repDelta = jumpRep, postureHint = hint, exerciseTag = "บาสเกตบอล")
+                RepEvalOutput(stepDelta = steps, repDelta = jumpRep, repPhaseProgress = progress, postureHint = hint, exerciseTag = "บาสเกตบอล")
             }
 
             SportType.BADMINTON -> {
@@ -492,18 +598,18 @@ internal class BiomechanicalRepEngine {
                     minIntervalMs = 220L,
                     now = now
                 )
-                val swing = detectRacketSwing(points, bodyScale, sensitivity, now)
+                val (swing, swingProgress) = detectRacketSwingDetailed(points, bodyScale, sensitivity, now)
                 val hint = if (isWholeBodyMoving) "แบดมินตัน: จับฟุตเวิร์ก & วงสวิงไม้" else "แบดมินตัน: พร้อมจับสวิงและก้าว"
-                RepEvalOutput(stepDelta = steps, repDelta = swing, postureHint = hint, exerciseTag = "แบดมินตัน")
+                RepEvalOutput(stepDelta = steps, repDelta = swing, repPhaseProgress = swingProgress, postureHint = hint, exerciseTag = "แบดมินตัน")
             }
 
             SportType.CYCLING -> {
-                val pedal = detectCyclingPedal(points, bodyScale, isWholeBodyMoving, now)
+                val (pedal, pedalProgress) = detectCyclingPedalDetailed(points, bodyScale, isWholeBodyMoving, now)
                 val hint = if (isWholeBodyMoving) "ปั่นจักรยาน: จับรอบปั่นเข่าจริง" else "ปั่นจักรยาน: หันข้างเข้ากล้องเพื่อจับรอบขา"
-                RepEvalOutput(repDelta = pedal, postureHint = hint, exerciseTag = "ปั่นจักรยาน")
+                RepEvalOutput(repDelta = pedal, repPhaseProgress = pedalProgress, postureHint = hint, exerciseTag = "ปั่นจักรยาน")
             }
 
-            SportType.GENERAL -> evaluateGeneral(focus, points, bodyScale, sensitivity, plankDetected, now)
+            SportType.GENERAL -> evaluateGeneral(focus, points, bodyScale, sensitivity, plankDetected, now, points3D, confidences)
         }
     }
 
@@ -513,33 +619,28 @@ internal class BiomechanicalRepEngine {
         bodyScale: Float,
         sensitivity: DetectionSensitivity,
         plankDetected: Boolean,
-        now: Long
+        now: Long,
+        points3D: Map<Int, Point3D>,
+        confidences: Map<Int, Float>
     ): RepEvalOutput {
         return when (focus) {
             GeneralExerciseFocus.PUSHUP -> {
-                val (rep, hint) = detectPushUp(points, bodyScale, sensitivity, strictPosture = false, now = now)
-                RepEvalOutput(repDelta = rep, postureHint = hint, exerciseTag = "วิดพื้น", isHorizontalPlank = true)
+                val res = detectPushUpDetailed(points, bodyScale, sensitivity, strictPosture = false, now = now, points3D = points3D, confidences = confidences)
+                res.copy(isHorizontalPlank = true)
             }
 
-            GeneralExerciseFocus.SQUAT -> {
-                val (rep, hint) = detectSquat(points, bodyScale, sensitivity, now)
-                RepEvalOutput(repDelta = rep, postureHint = hint, exerciseTag = "สควอท")
-            }
+            GeneralExerciseFocus.SQUAT -> detectSquatDetailed(points, bodyScale, sensitivity, now, points3D, confidences)
 
-            GeneralExerciseFocus.LUNGE -> {
-                val (rep, hint, _) = detectLungeInternal(points, bodyScale, sensitivity, now)
-                RepEvalOutput(repDelta = rep, postureHint = hint, exerciseTag = "ลันจ์")
-            }
+            GeneralExerciseFocus.LUNGE -> detectLungeDetailed(points, bodyScale, sensitivity, now, points3D, confidences)
 
-            GeneralExerciseFocus.SITUP -> {
-                val (rep, hint, _) = detectSitUpInternal(points, bodyScale, sensitivity, now)
-                RepEvalOutput(repDelta = rep, postureHint = hint, exerciseTag = "ซิทอัพ", isHorizontalPlank = false)
-            }
+            GeneralExerciseFocus.SITUP -> detectSitUpDetailed(points, bodyScale, sensitivity, now, points3D, confidences)
 
             GeneralExerciseFocus.PLANK -> {
                 val (holdingValid, hint) = detectPlankHold(points, bodyScale)
                 RepEvalOutput(
                     repDelta = 0,
+                    repPhaseProgress = if (holdingValid) 1f else 0f,
+                    repPhaseLabel = if (holdingValid) "ค้างท่าตรง" else "จัดแกนตัว",
                     postureHint = hint,
                     exerciseTag = "แพลงก์",
                     isHorizontalPlank = true,
@@ -547,54 +648,168 @@ internal class BiomechanicalRepEngine {
                 )
             }
 
-            GeneralExerciseFocus.JUMPING_JACK -> {
-                val (rep, hint) = detectJumpingJack(points, bodyScale, sensitivity, now)
-                RepEvalOutput(repDelta = rep, postureHint = hint, exerciseTag = "กระโดดตบ")
+            GeneralExerciseFocus.JUMPING_JACK -> detectJumpingJackDetailed(points, bodyScale, sensitivity, now)
+
+            GeneralExerciseFocus.AUTO -> evaluateAutoWithHysteresis(
+                points = points,
+                bodyScale = bodyScale,
+                sensitivity = sensitivity,
+                plankDetected = plankDetected,
+                now = now,
+                points3D = points3D,
+                confidences = confidences
+            )
+        }
+    }
+
+    private fun evaluateAutoWithHysteresis(
+        points: Map<Int, PointF>,
+        bodyScale: Float,
+        sensitivity: DetectionSensitivity,
+        plankDetected: Boolean,
+        now: Long,
+        points3D: Map<Int, Point3D>,
+        confidences: Map<Int, Float>
+    ): RepEvalOutput {
+        // Always finish any rep currently in progress before considering posture switches!
+        when {
+            pushupState == 1 -> {
+                activeAutoTag = "วิดพื้น"
+                pendingAutoTag = ""
+                pendingAutoStreak = 0
+                return detectPushUpDetailed(points, bodyScale, sensitivity, strictPosture = true, now = now, points3D = points3D, confidences = confidences).copy(isHorizontalPlank = true)
             }
-
-            GeneralExerciseFocus.AUTO -> {
-                // 1) Push-up posture takes top priority when body is in horizontal/inclined plank
-                if (plankDetected || pushupState == 1) {
-                    val (pushRep, pushHint) = detectPushUp(points, bodyScale, sensitivity, strictPosture = true, now = now)
-                    return RepEvalOutput(
-                        repDelta = pushRep,
-                        postureHint = pushHint,
-                        exerciseTag = "วิดพื้น",
-                        isHorizontalPlank = true
-                    )
-                }
-
-                // 2) Floor Sit-up posture (low hip + raised knees / reclined torso)
-                val (sitRep, sitHint, sitActive) = detectSitUpInternal(points, bodyScale, sensitivity, now)
-                if (sitRep > 0 || sitActive) {
-                    return RepEvalOutput(repDelta = sitRep, postureHint = sitHint, exerciseTag = "ซิทอัพ")
-                }
-
-                // 3) Upright Lunge or Squat
-                val (lungeRep, lungeHint, lungeActive) = detectLungeInternal(points, bodyScale, sensitivity, now)
-                if (lungeRep > 0 || lungeActive) {
-                    return RepEvalOutput(repDelta = lungeRep, postureHint = lungeHint, exerciseTag = "ลันจ์")
-                }
-
-                val (squatRep, squatHint, squatActive) = detectSquatInternal(points, bodyScale, sensitivity, now)
-                if (squatRep > 0 || squatActive) {
-                    return RepEvalOutput(repDelta = squatRep, postureHint = squatHint, exerciseTag = "สควอท")
-                }
-
-                // 4) Jumping Jack (strictly requires BOTH overhead arms AND leg spread)
-                val (jackRep, jackHint, jackActive) = detectJumpingJackInternal(points, bodyScale, sensitivity, now)
-                if (jackRep > 0 || jackActive) {
-                    return RepEvalOutput(repDelta = jackRep, postureHint = jackHint, exerciseTag = "กระโดดตบ")
-                }
-
-                val defaultHint = if (jackHint.isNotBlank()) {
-                    jackHint
-                } else {
-                    "ทั่วไป AI: พร้อมจับ วิดพื้น / สควอท / ลันจ์ / ซิทอัพ / กระโดดตบ"
-                }
-                RepEvalOutput(repDelta = 0, postureHint = defaultHint, exerciseTag = "บอดี้เวท")
+            situpState == 1 -> {
+                activeAutoTag = "ซิทอัพ"
+                pendingAutoTag = ""
+                pendingAutoStreak = 0
+                return detectSitUpDetailed(points, bodyScale, sensitivity, now, points3D, confidences)
+            }
+            lungeState == 1 -> {
+                activeAutoTag = "ลันจ์"
+                pendingAutoTag = ""
+                pendingAutoStreak = 0
+                return detectLungeDetailed(points, bodyScale, sensitivity, now, points3D, confidences)
+            }
+            squatState == 1 -> {
+                activeAutoTag = "สควอท"
+                pendingAutoTag = ""
+                pendingAutoStreak = 0
+                return detectSquatDetailed(points, bodyScale, sensitivity, now, points3D, confidences)
+            }
+            jackState == 1 -> {
+                activeAutoTag = "กระโดดตบ"
+                pendingAutoTag = ""
+                pendingAutoStreak = 0
+                return detectJumpingJackDetailed(points, bodyScale, sensitivity, now)
             }
         }
+
+        // Stateless posture classification so inactive state machines are never mutated prematurely
+        val candidateTag = classifyAutoPosture(points, bodyScale, plankDetected, points3D)
+
+        if (activeAutoTag.isBlank()) {
+            activeAutoTag = candidateTag
+            pendingAutoTag = ""
+            pendingAutoStreak = 0
+        } else if (candidateTag.isNotBlank() && candidateTag != activeAutoTag) {
+            if (pendingAutoTag == candidateTag) {
+                pendingAutoStreak++
+            } else {
+                pendingAutoTag = candidateTag
+                pendingAutoStreak = 1
+            }
+            if (pendingAutoStreak >= 3) {
+                activeAutoTag = candidateTag
+                pendingAutoTag = ""
+                pendingAutoStreak = 0
+                clearMidRepFlags()
+            }
+        } else {
+            pendingAutoTag = ""
+            pendingAutoStreak = 0
+        }
+
+        return when (activeAutoTag) {
+            "วิดพื้น" -> detectPushUpDetailed(points, bodyScale, sensitivity, strictPosture = true, now = now, points3D = points3D, confidences = confidences).copy(isHorizontalPlank = true)
+            "ซิทอัพ" -> detectSitUpDetailed(points, bodyScale, sensitivity, now, points3D, confidences)
+            "ลันจ์" -> detectLungeDetailed(points, bodyScale, sensitivity, now, points3D, confidences)
+            "สควอท" -> detectSquatDetailed(points, bodyScale, sensitivity, now, points3D, confidences)
+            "กระโดดตบ" -> detectJumpingJackDetailed(points, bodyScale, sensitivity, now)
+            else -> RepEvalOutput(
+                repDelta = 0,
+                postureHint = "ทั่วไป AI: พร้อมจับ วิดพื้น / สควอท / ลันจ์ / ซิทอัพ / กระโดดตบ",
+                exerciseTag = "บอดี้เวท"
+            )
+        }
+    }
+
+    private fun clearMidRepFlags() {
+        pushupState = 0
+        squatState = 0
+        lungeState = 0
+        situpState = 0
+        jackState = 0
+    }
+
+    private fun classifyAutoPosture(
+        points: Map<Int, PointF>,
+        bodyScale: Float,
+        plankDetected: Boolean,
+        points3D: Map<Int, Point3D>
+    ): String {
+        if (plankDetected) return "วิดพื้น"
+
+        val shoulderMid = mid(points[PoseLandmark.LEFT_SHOULDER], points[PoseLandmark.RIGHT_SHOULDER]) ?: return ""
+        val hipMid = mid(points[PoseLandmark.LEFT_HIP], points[PoseLandmark.RIGHT_HIP]) ?: return ""
+        val scale = bodyScale.coerceAtLeast(36f)
+
+        val ankleMid = mid(points[PoseLandmark.LEFT_ANKLE], points[PoseLandmark.RIGHT_ANKLE])
+        val kneeMid = mid(points[PoseLandmark.LEFT_KNEE], points[PoseLandmark.RIGHT_KNEE])
+        val isFloorSeated = kneeMid != null && (
+            (ankleMid != null && (ankleMid.y - hipMid.y) <= 0.44f * scale) ||
+                (ankleMid == null && abs(kneeMid.x - hipMid.x) >= 0.40f * scale)
+            )
+        if (isFloorSeated) return "ซิทอัพ"
+
+        // Jumping jack: both wrists clearly lifted above shoulders while upright
+        val lWrist = points[PoseLandmark.LEFT_WRIST]
+        val rWrist = points[PoseLandmark.RIGHT_WRIST]
+        val lElbow = points[PoseLandmark.LEFT_ELBOW]
+        val rElbow = points[PoseLandmark.RIGHT_ELBOW]
+        val handsOverhead = lWrist != null && rWrist != null &&
+            (lWrist.y < shoulderMid.y - 0.14f * scale || (lElbow != null && lElbow.y < shoulderMid.y - 0.12f * scale)) &&
+            (rWrist.y < shoulderMid.y - 0.14f * scale || (rElbow != null && rElbow.y < shoulderMid.y - 0.12f * scale))
+        if (handsOverhead && hipMid.y > shoulderMid.y + 0.25f * scale) {
+            return "กระโดดตบ"
+        }
+
+        if (hipMid.y > shoulderMid.y + 0.25f * scale && kneeMid != null) {
+            if (isAsymmetricSplitLunge(points, scale, points3D)) {
+                return "ลันจ์"
+            }
+            return "สควอท"
+        }
+        return ""
+    }
+
+    private fun isAsymmetricSplitLunge(
+        points: Map<Int, PointF>,
+        scale: Float,
+        points3D: Map<Int, Point3D>
+    ): Boolean {
+        val lKnee = points[PoseLandmark.LEFT_KNEE] ?: return false
+        val rKnee = points[PoseLandmark.RIGHT_KNEE] ?: return false
+        val lAnkle = points[PoseLandmark.LEFT_ANKLE] ?: return false
+        val rAnkle = points[PoseLandmark.RIGHT_ANKLE] ?: return false
+        val ankleSplit = max(abs(lAnkle.x - rAnkle.x), abs(lAnkle.y - rAnkle.y)) / scale
+        if (ankleSplit < 0.52f) return false
+        val ankleHeightDiff = abs(lAnkle.y - rAnkle.y) / scale
+        val kneeHeightDiff = abs(lKnee.y - rKnee.y) / scale
+        val lDeg = tripletJointAngleDeg(PoseLandmark.LEFT_HIP, PoseLandmark.LEFT_KNEE, PoseLandmark.LEFT_ANKLE, points, points3D)
+        val rDeg = tripletJointAngleDeg(PoseLandmark.RIGHT_HIP, PoseLandmark.RIGHT_KNEE, PoseLandmark.RIGHT_ANKLE, points, points3D)
+        val kneeAsym = if (lDeg != null && rDeg != null) abs(lDeg - rDeg) >= 16f else false
+        return ankleHeightDiff >= 0.10f || kneeHeightDiff >= 0.10f || kneeAsym || ankleSplit >= 0.78f
     }
 
     /**
@@ -603,12 +818,12 @@ internal class BiomechanicalRepEngine {
      * requires visible hips + shoulders + legs, and requires multi-segment upward lift
      * so waving arms while standing/sitting NEVER counts.
      */
-    private fun detectJumpRope(
+    private fun detectJumpRopeDetailed(
         points: Map<Int, PointF>,
         bodyScale: Float,
         sensitivity: DetectionSensitivity,
         now: Long
-    ): Pair<Int, String> {
+    ): Triple<Int, String, Float> {
         val shoulderMid = mid(points[PoseLandmark.LEFT_SHOULDER], points[PoseLandmark.RIGHT_SHOULDER])
         val hipMid = mid(points[PoseLandmark.LEFT_HIP], points[PoseLandmark.RIGHT_HIP])
         val lLeg = points[PoseLandmark.LEFT_ANKLE] ?: points[PoseLandmark.LEFT_KNEE]
@@ -617,14 +832,14 @@ internal class BiomechanicalRepEngine {
 
         if (shoulderMid == null || hipMid == null || legMid == null) {
             jumpState = 0
-            return 0 to "กระโดดเชือก: ถอยให้เห็นสะโพกและขาเพื่อกันนับมือหลอก"
+            return Triple(0, "กระโดดเชือก: ถอยให้เห็นสะโพกและขาเพื่อกันนับมือหลอก", 0f)
         }
 
         // Must be standing upright (knees/ankles clearly below hips), not sitting folded or horizontal
         val legDropRatio = (legMid.y - hipMid.y) / bodyScale.coerceAtLeast(30f)
         if (legDropRatio < 0.35f) {
             jumpState = 0
-            return 0 to "กระโดดเชือก: ยืนตรงให้เห็นช่วงขาชัดเจน"
+            return Triple(0, "กระโดดเชือก: ยืนตรงให้เห็นช่วงขาชัดเจน", 0f)
         }
 
         val curScale = stableJumpScale ?: bodyScale
@@ -661,37 +876,39 @@ internal class BiomechanicalRepEngine {
                 baselineHipY = hipMid.y
                 baselineShoulderY = shoulderMid.y
                 baselineLegY = legMid.y
-                return 0 to "กระโดดเชือก: ปรับระดับพื้นใหม่ พร้อมจับจังหวะ"
+                return Triple(0, "กระโดดเชือก: ปรับระดับพื้นใหม่ พร้อมจับจังหวะ", 0f)
             }
         }
 
         val sens = sensitivity.motionDeadzoneScale
-        val hipTakeoffThresh = 0.058f * sens
-        val shoulderTakeoffThresh = 0.032f * sens
-        val legTakeoffThresh = 0.018f * sens
-        val landThresh = 0.022f * sens
+        val hipTakeoffThresh = 0.045f * sens
+        val shoulderTakeoffThresh = 0.025f * sens
+        val legTakeoffThresh = 0.013f * sens
+        val landThresh = 0.018f * sens
 
         val wholeBodyLifted = hipLiftNorm > hipTakeoffThresh &&
             shoulderLiftNorm > shoulderTakeoffThresh &&
             (legLiftNorm > legTakeoffThresh || hipLiftNorm > hipTakeoffThresh * 1.45f)
 
         var rep = 0
-        if (jumpState == 0 && wholeBodyLifted && (now - lastRepMillis) >= 220L) {
+        // Do NOT gate takeoff on lastRepMillis (fast jump rope bounces every ~300ms would skip every 2nd jump!)
+        if (jumpState == 0 && wholeBodyLifted) {
             jumpState = 1
             jumpTakeoffMillis = now
             currentRepPeakAmplitude = hipLiftNorm
-        } else if (jumpState == 1 && hipLiftNorm < landThresh && (now - lastRepMillis) >= 220L) {
+        } else if (jumpState == 1 && hipLiftNorm < landThresh && (now - lastRepMillis) >= 180L) {
             jumpState = 0
             rep = 1
             lastRepMillis = now
         }
 
+        val progress = if (jumpState == 1) 1f else (hipLiftNorm / hipTakeoffThresh).coerceIn(0f, 0.99f)
         val stateText = if (jumpState == 1) {
             "กระโดดเชือก: ลอยตัวทั้งตัวจริง!"
         } else {
             "กระโดดเชือก: จับการลอยตัวจริง (ขยับเฉพาะมือไม่นับ)"
         }
-        return rep to stateText
+        return Triple(rep, stateText, progress)
     }
 
     /**
@@ -729,7 +946,8 @@ internal class BiomechanicalRepEngine {
         } ?: shoulderWidth
         val isFrontFloorPlank = torsoDy <= maxFrontTorsoDrop &&
             wristSpread >= shoulderWidth * 0.62f &&
-            (hipMid.y - shoulderMid.y) <= maxFrontTorsoDrop
+            (hipMid.y - shoulderMid.y) <= maxFrontTorsoDrop &&
+            wristMid.y >= hipMid.y - 0.08f * bodyScale
 
         // Guard against upright standing: if ankles are directly vertically beneath hips by full leg length, NOT a plank
         val ankleMid = mid(points[PoseLandmark.LEFT_ANKLE], points[PoseLandmark.RIGHT_ANKLE])
@@ -741,43 +959,51 @@ internal class BiomechanicalRepEngine {
         return isSideOrDiagPlank || isFrontFloorPlank
     }
 
-    private fun detectPushUp(
+    private fun detectPushUpDetailed(
         points: Map<Int, PointF>,
         bodyScale: Float,
         sensitivity: DetectionSensitivity,
         strictPosture: Boolean,
-        now: Long
-    ): Pair<Int, String> {
+        now: Long,
+        points3D: Map<Int, Point3D>,
+        confidences: Map<Int, Float>
+    ): RepEvalOutput {
         val shoulderMid = mid(points[PoseLandmark.LEFT_SHOULDER], points[PoseLandmark.RIGHT_SHOULDER])
         val wristMid = mid(points[PoseLandmark.LEFT_WRIST], points[PoseLandmark.RIGHT_WRIST])
-        val elbowAngle = measureElbowAngleDeg(points)
+        val elbowAngle = measureElbowAngleDeg(points, points3D, confidences)
 
         if (shoulderMid == null || wristMid == null || elbowAngle == null) {
-            return 0 to "วิดพื้น: จัดกล้องให้เห็นไหล่ ศอก และข้อมือชัดเจน"
+            return RepEvalOutput(
+                postureHint = "วิดพื้น: จัดกล้องให้เห็นไหล่ ศอก และข้อมือชัดเจน",
+                exerciseTag = "วิดพื้น"
+            )
         }
 
         val inPlank = isPushUpPlankPosture(points, bodyScale, strict = strictPosture)
         if (!inPlank && pushupState == 0) {
             pushupArmed = false
-            return 0 to "วิดพื้น: เตรียมท่าวิดพื้นยันมือกับพื้น (หันข้างหรือหันหน้าเข้ากล้อง)"
+            return RepEvalOutput(
+                postureHint = "วิดพื้น: เตรียมท่าวิดพื้นยันมือกับพื้น (หันข้างหรือหันหน้าเข้ากล้อง)",
+                exerciseTag = "วิดพื้น"
+            )
         }
 
         val sens = sensitivity.motionDeadzoneScale
         val topAngleThresh = when {
-            sens <= 0.85f -> 136f
-            sens >= 1.15f -> 148f
-            else -> 142f
+            sens <= 0.85f -> 126f
+            sens >= 1.15f -> 140f
+            else -> 134f
         }
         val bottomAngleThresh = when {
-            sens <= 0.85f -> 118f
-            sens >= 1.15f -> 98f
-            else -> 108f
+            sens <= 0.85f -> 120f
+            sens >= 1.15f -> 100f
+            else -> 112f
         }
 
         val shoulderClearance = ((wristMid.y - shoulderMid.y) / bodyScale.coerceAtLeast(36f)).coerceAtLeast(0f)
-        if (pushupState == 0 && elbowAngle >= topAngleThresh && shoulderClearance >= 0.16f) {
+        if (pushupState == 0 && elbowAngle >= topAngleThresh && shoulderClearance >= 0.14f) {
             val prevTop = pushupTopClearance ?: shoulderClearance
-            pushupTopClearance = prevTop * 0.80f + shoulderClearance * 0.20f
+            pushupTopClearance = prevTop * 0.78f + shoulderClearance * 0.22f
             pushupArmed = true
         }
 
@@ -785,12 +1011,19 @@ internal class BiomechanicalRepEngine {
         val dropFromTop = (topRef - shoulderClearance).coerceAtLeast(0f)
         val elbowInt = elbowAngle.roundToInt()
 
+        val rawAngleProg = ((topAngleThresh + 14f - elbowAngle) / ((topAngleThresh + 14f) - bottomAngleThresh).coerceAtLeast(15f))
+            .coerceIn(0f, 1f)
+        val rawDropProg = if (topRef >= 0.24f) (dropFromTop / (0.18f * sens)).coerceIn(0f, 1f) else 0f
+        val depthProg = max(rawAngleProg, rawDropProg)
+
         var rep = 0
         var hint: String
 
         if (pushupState == 0) {
-            val sufficientDrop = dropFromTop >= 0.07f * sens || shoulderClearance <= 0.40f
-            if (pushupArmed && elbowAngle <= bottomAngleThresh && sufficientDrop && (now - lastRepMillis) >= 380L) {
+            val sufficientDrop = dropFromTop >= 0.06f * sens || shoulderClearance <= 0.42f
+            val angleOrChestDepth = (elbowAngle <= bottomAngleThresh && sufficientDrop) ||
+                (topRef >= 0.24f && dropFromTop >= 0.18f * sens && elbowAngle <= bottomAngleThresh + 12f)
+            if (pushupArmed && angleOrChestDepth && (now - lastRepMillis) >= 340L) {
                 pushupState = 1
                 pushupPeakDepth = max(dropFromTop, (topAngleThresh - elbowAngle) / 100f)
                 currentRepPeakAmplitude = pushupPeakDepth
@@ -805,7 +1038,7 @@ internal class BiomechanicalRepEngine {
             pushupPeakDepth = max(pushupPeakDepth, bendMetric)
             currentRepPeakAmplitude = pushupPeakDepth
 
-            if (elbowAngle >= (topAngleThresh - 4f) && dropFromTop <= max(0.14f, topRef * 0.35f)) {
+            if (elbowAngle >= (topAngleThresh - 4f) && dropFromTop <= max(0.15f, topRef * 0.36f)) {
                 pushupState = 0
                 rep = 1
                 lastRepMillis = now
@@ -815,39 +1048,51 @@ internal class BiomechanicalRepEngine {
             }
         }
 
-        return rep to hint
+        val finalProg = if (pushupState == 1) max(depthProg, 0.85f) else depthProg
+        val phaseLbl = when {
+            rep > 0 -> "ครบ +1!"
+            pushupState == 1 -> "ดันขึ้น!"
+            finalProg >= 0.35f -> "ลง ${(finalProg * 100).roundToInt()}%"
+            else -> ""
+        }
+        return RepEvalOutput(
+            repDelta = rep,
+            repPhaseProgress = finalProg,
+            repPhaseLabel = phaseLbl,
+            postureHint = hint,
+            exerciseTag = "วิดพื้น",
+            repAmplitude = currentRepPeakAmplitude
+        )
     }
 
-    private fun detectSquat(
+    private fun detectSquatDetailed(
         points: Map<Int, PointF>,
         bodyScale: Float,
         sensitivity: DetectionSensitivity,
-        now: Long
-    ): Pair<Int, String> {
-        val (rep, hint, _) = detectSquatInternal(points, bodyScale, sensitivity, now)
-        return rep to hint
-    }
-
-    private fun detectSquatInternal(
-        points: Map<Int, PointF>,
-        bodyScale: Float,
-        sensitivity: DetectionSensitivity,
-        now: Long
-    ): Triple<Int, String, Boolean> {
+        now: Long,
+        points3D: Map<Int, Point3D>,
+        confidences: Map<Int, Float>
+    ): RepEvalOutput {
         val shoulderMid = mid(points[PoseLandmark.LEFT_SHOULDER], points[PoseLandmark.RIGHT_SHOULDER])
         val hipMid = mid(points[PoseLandmark.LEFT_HIP], points[PoseLandmark.RIGHT_HIP])
         val kneeMid = mid(points[PoseLandmark.LEFT_KNEE], points[PoseLandmark.RIGHT_KNEE])
         if (shoulderMid == null || hipMid == null || kneeMid == null) {
-            return Triple(0, "สควอท: ถอยหลังให้เห็นสะโพกและหัวเข่าชัดเจน", false)
+            return RepEvalOutput(
+                postureHint = "สควอท: ถอยหลังให้เห็นสะโพกและหัวเข่าชัดเจน",
+                exerciseTag = "สควอท"
+            )
         }
 
         // Must be upright (shoulders above hips)
         if (hipMid.y <= shoulderMid.y + 0.25f * bodyScale) {
             squatArmed = false
-            return Triple(0, "สควอท: ยืนตัวตรงให้เห็นช่วงขา", false)
+            return RepEvalOutput(
+                postureHint = "สควอท: ยืนตัวตรงให้เห็นช่วงขา",
+                exerciseTag = "สควอท"
+            )
         }
 
-        val kneeAngle = measureKneeAngleDeg(points)
+        val kneeAngle = measureKneeAngleDeg(points, points3D, confidences)
         val hipToKneeNorm = (kneeMid.y - hipMid.y) / bodyScale.coerceAtLeast(36f)
         val baseStanding = standingKneeHipRatio ?: hipToKneeNorm.coerceAtLeast(0.62f)
         val sens = sensitivity.motionDeadzoneScale
@@ -867,32 +1112,50 @@ internal class BiomechanicalRepEngine {
             sens >= 1.15f -> 108f
             else -> 118f
         }
-        val ratioDownThresh = baseStanding * (0.65f * sens).coerceIn(0.48f, 0.76f)
-        val deepSquatReached = if (kneeAngle != null) {
-            kneeAngle <= kneeDownThresh && hipDropNorm >= 0.10f
-        } else {
-            hipToKneeNorm < ratioDownThresh && hipDropNorm >= 0.12f
-        }
+        val ratioDownThresh = baseStanding * (0.70f * sens).coerceIn(0.50f, 0.78f)
+        // Support both 3D/side knee angle AND front-facing Z-foreshortened hip-to-knee drop
+        val deepSquatReached = (kneeAngle != null && kneeAngle <= kneeDownThresh && hipDropNorm >= 0.09f) ||
+            (hipToKneeNorm < ratioDownThresh && hipDropNorm >= 0.15f)
 
         val squatDepth = max(hipDropNorm, (baseStanding - hipToKneeNorm).coerceAtLeast(0f))
         if (squatState == 1) {
             currentRepPeakAmplitude = max(currentRepPeakAmplitude, squatDepth)
         }
 
+        val angleProg = if (kneeAngle != null) {
+            ((160f - kneeAngle) / (160f - kneeDownThresh).coerceAtLeast(15f)).coerceIn(0f, 1f)
+        } else 0f
+        val dropProg = (hipDropNorm / 0.18f).coerceIn(0f, 1f)
+        val rawProg = max(angleProg, dropProg)
+
         var rep = 0
         var label = "สควอท: ย่อสะโพกลงให้เข่างอ (${kneeAngle?.roundToInt() ?: 0}°)"
-        if (squatState == 0 && squatArmed && deepSquatReached && (now - lastRepMillis) >= 380L) {
+        if (squatState == 0 && squatArmed && deepSquatReached && (now - lastRepMillis) >= 340L) {
             squatState = 1
             currentRepPeakAmplitude = squatDepth
             label = "สควอท: ย่อลึกดีแล้ว! ดันตัวขึ้น"
-        } else if (squatState == 1 && (kneeAngle == null || kneeAngle >= 146f) && hipToKneeNorm > baseStanding * 0.83f) {
+        } else if (squatState == 1 && (kneeAngle == null || kneeAngle >= 142f) && hipToKneeNorm > baseStanding * 0.80f) {
             squatState = 0
             rep = 1
             lastRepMillis = now
             label = "สควอท: นับ +1 ครั้ง!"
         }
 
-        return Triple(rep, label, squatState == 1)
+        val finalProg = if (squatState == 1) max(rawProg, 0.85f) else rawProg
+        val phaseLbl = when {
+            rep > 0 -> "ครบ +1!"
+            squatState == 1 -> "ดันขึ้น!"
+            finalProg >= 0.25f -> "ลึก ${(finalProg * 100).roundToInt()}%"
+            else -> ""
+        }
+        return RepEvalOutput(
+            repDelta = rep,
+            repPhaseProgress = finalProg,
+            repPhaseLabel = phaseLbl,
+            postureHint = label,
+            exerciseTag = "สควอท",
+            repAmplitude = currentRepPeakAmplitude
+        )
     }
 
     /**
@@ -939,12 +1202,14 @@ internal class BiomechanicalRepEngine {
     /**
      * Lunge detector: requires split stance leg separation + vertical hip drop + knee flexion < 124 deg.
      */
-    private fun detectLungeInternal(
+    private fun detectLungeDetailed(
         points: Map<Int, PointF>,
         bodyScale: Float,
         sensitivity: DetectionSensitivity,
-        now: Long
-    ): Triple<Int, String, Boolean> {
+        now: Long,
+        points3D: Map<Int, Point3D>,
+        confidences: Map<Int, Float>
+    ): RepEvalOutput {
         val shoulderMid = mid(points[PoseLandmark.LEFT_SHOULDER], points[PoseLandmark.RIGHT_SHOULDER])
         val hipMid = mid(points[PoseLandmark.LEFT_HIP], points[PoseLandmark.RIGHT_HIP])
         val lKnee = points[PoseLandmark.LEFT_KNEE]
@@ -953,20 +1218,23 @@ internal class BiomechanicalRepEngine {
         val rAnkle = points[PoseLandmark.RIGHT_ANKLE]
 
         if (shoulderMid == null || hipMid == null || lKnee == null || rKnee == null || lAnkle == null || rAnkle == null) {
-            return Triple(0, "ลันจ์: ถอยให้เห็นขาก้าวแยกหน้า-หลังชัดเจน", false)
+            return RepEvalOutput(postureHint = "ลันจ์: ถอยให้เห็นขาก้าวแยกหน้า-หลังชัดเจน", exerciseTag = "ลันจ์")
         }
         if (hipMid.y <= shoulderMid.y + 0.25f * bodyScale) {
             lungeArmed = false
-            return Triple(0, "ลันจ์: ยืนลำตัวตรง", false)
+            return RepEvalOutput(postureHint = "ลันจ์: ยืนลำตัวตรง", exerciseTag = "ลันจ์")
         }
 
         val scale = bodyScale.coerceAtLeast(36f)
         val ankleSplit = max(abs(lAnkle.x - rAnkle.x), abs(lAnkle.y - rAnkle.y)) / scale
-        val kneeSplit = max(abs(lKnee.x - rKnee.x), abs(lKnee.y - rKnee.y)) / scale
-        val isSplitStance = ankleSplit >= 0.42f || kneeSplit >= 0.36f
+        val isSplitStance = isAsymmetricSplitLunge(points, scale, points3D) || ankleSplit >= 0.56f
 
-        val lKneeDeg = tripletAngleIfValid(points[PoseLandmark.LEFT_HIP], lKnee, lAnkle)
-        val rKneeDeg = tripletAngleIfValid(points[PoseLandmark.RIGHT_HIP], rKnee, rAnkle)
+        val lKneeDeg = tripletJointAngleDeg(
+            PoseLandmark.LEFT_HIP, PoseLandmark.LEFT_KNEE, PoseLandmark.LEFT_ANKLE, points, points3D
+        )
+        val rKneeDeg = tripletJointAngleDeg(
+            PoseLandmark.RIGHT_HIP, PoseLandmark.RIGHT_KNEE, PoseLandmark.RIGHT_ANKLE, points, points3D
+        )
         val minKneeDeg = minOf(lKneeDeg ?: 180f, rKneeDeg ?: 180f)
         val maxKneeDeg = maxOf(lKneeDeg ?: 180f, rKneeDeg ?: 180f)
 
@@ -980,6 +1248,9 @@ internal class BiomechanicalRepEngine {
         val sens = sensitivity.motionDeadzoneScale
         val downKneeThresh = (122f / sens).coerceIn(106f, 132f)
 
+        val kneeProg = ((156f - minKneeDeg) / (156f - downKneeThresh).coerceAtLeast(15f)).coerceIn(0f, 1f)
+        val rawProg = if (isSplitStance) max(kneeProg, (hipDrop / 0.12f).coerceIn(0f, 1f)) else 0f
+
         var rep = 0
         var hint = "ลันจ์: ก้าวขาแยกหน้า-หลังแล้วย่อเข่าลง (${minKneeDeg.roundToInt()}°)"
         if (lungeState == 0 && lungeArmed && isSplitStance && minKneeDeg <= downKneeThresh && hipDrop >= 0.08f && (now - lastRepMillis) >= 380L) {
@@ -992,24 +1263,34 @@ internal class BiomechanicalRepEngine {
             lastRepMillis = now
             hint = "ลันจ์: นับ +1 ครั้ง!"
         }
-        return Triple(rep, hint, lungeState == 1)
+        val finalProg = if (lungeState == 1) max(rawProg, 0.85f) else rawProg
+        return RepEvalOutput(
+            repDelta = rep,
+            repPhaseProgress = finalProg,
+            repPhaseLabel = if (lungeState == 1) "ดันขึ้น!" else if (finalProg >= 0.3f) "ลึก ${(finalProg * 100).roundToInt()}%" else "",
+            postureHint = hint,
+            exerciseTag = "ลันจ์",
+            repAmplitude = currentRepPeakAmplitude
+        )
     }
 
     /**
      * Sit-up / Crunch detector: requires floor posture (knees flexed, hips near floor band) and
      * measures shoulder-hip-knee torso curl angle dropping below ~86 deg then extending back > 118 deg.
      */
-    private fun detectSitUpInternal(
+    private fun detectSitUpDetailed(
         points: Map<Int, PointF>,
         bodyScale: Float,
         sensitivity: DetectionSensitivity,
-        now: Long
-    ): Triple<Int, String, Boolean> {
+        now: Long,
+        points3D: Map<Int, Point3D>,
+        confidences: Map<Int, Float>
+    ): RepEvalOutput {
         val shoulderMid = mid(points[PoseLandmark.LEFT_SHOULDER], points[PoseLandmark.RIGHT_SHOULDER])
         val hipMid = mid(points[PoseLandmark.LEFT_HIP], points[PoseLandmark.RIGHT_HIP])
         val kneeMid = mid(points[PoseLandmark.LEFT_KNEE], points[PoseLandmark.RIGHT_KNEE])
         if (shoulderMid == null || hipMid == null || kneeMid == null) {
-            return Triple(0, "ซิทอัพ: หันข้างให้เห็นหัวไหล่ สะโพก และเข่างอ", false)
+            return RepEvalOutput(postureHint = "ซิทอัพ: หันข้างให้เห็นหัวไหล่ สะโพก และเข่างอ", exerciseTag = "ซิทอัพ")
         }
 
         val scale = bodyScale.coerceAtLeast(36f)
@@ -1021,19 +1302,28 @@ internal class BiomechanicalRepEngine {
             (ankleMid != null && kneeMid.y < hipMid.y + 0.15f * scale)
         if (!looksFloorSeated) {
             situpArmed = false
-            return Triple(0, "ซิทอัพ: นอนชันเข่าหันข้างเข้ากล้อง", false)
+            return RepEvalOutput(postureHint = "ซิทอัพ: นอนชันเข่าหันข้างเข้ากล้อง", exerciseTag = "ซิทอัพ")
         }
 
-        val torsoHipKneeAngle = tripletAngleIfValid(shoulderMid, hipMid, kneeMid)
-            ?: return Triple(0, "ซิทอัพ: จัดกล้องให้เห็นแนวลำตัวชัดเจน", false)
+        val s3d = mid3D(points3D[PoseLandmark.LEFT_SHOULDER], points3D[PoseLandmark.RIGHT_SHOULDER])
+        val h3d = mid3D(points3D[PoseLandmark.LEFT_HIP], points3D[PoseLandmark.RIGHT_HIP])
+        val k3d = mid3D(points3D[PoseLandmark.LEFT_KNEE], points3D[PoseLandmark.RIGHT_KNEE])
+        val torsoHipKneeAngle = if (s3d != null && h3d != null && k3d != null) {
+            tripletAngle3DIfValid(s3d, h3d, k3d) ?: tripletAngleIfValid(shoulderMid, hipMid, kneeMid)
+        } else {
+            tripletAngleIfValid(shoulderMid, hipMid, kneeMid)
+        } ?: return RepEvalOutput(postureHint = "ซิทอัพ: จัดกล้องให้เห็นแนวลำตัวชัดเจน", exerciseTag = "ซิทอัพ")
 
         val sens = sensitivity.motionDeadzoneScale
-        val downAngleThresh = (116f / sens).coerceIn(106f, 130f)
-        val upAngleThresh = (84f * sens).coerceIn(72f, 94f)
+        val downAngleThresh = (112f / sens).coerceIn(102f, 126f)
+        val upAngleThresh = (92f * sens).coerceIn(78f, 102f)
 
         if (situpState == 0 && torsoHipKneeAngle >= downAngleThresh) {
             situpArmed = true
         }
+
+        val curlProg = ((downAngleThresh - torsoHipKneeAngle) / (downAngleThresh - upAngleThresh).coerceAtLeast(12f))
+            .coerceIn(0f, 1f)
 
         var rep = 0
         var hint = "ซิทอัพ: ยกอกเข้าหาเข่า (${torsoHipKneeAngle.roundToInt()}°)"
@@ -1047,17 +1337,15 @@ internal class BiomechanicalRepEngine {
             lastRepMillis = now
             hint = "ซิทอัพ: นับ +1 ครั้ง!"
         }
-        return Triple(rep, hint, situpState == 1 || (situpArmed && torsoHipKneeAngle < downAngleThresh - 6f))
-    }
-
-    private fun detectJumpingJack(
-        points: Map<Int, PointF>,
-        bodyScale: Float,
-        sensitivity: DetectionSensitivity,
-        now: Long
-    ): Pair<Int, String> {
-        val (rep, hint, _) = detectJumpingJackInternal(points, bodyScale, sensitivity, now)
-        return rep to hint
+        val finalProg = if (situpState == 1) max(curlProg, 0.85f) else curlProg
+        return RepEvalOutput(
+            repDelta = rep,
+            repPhaseProgress = finalProg,
+            repPhaseLabel = if (situpState == 1) "ผ่อนลง!" else if (finalProg >= 0.25f) "ยกตัว ${(finalProg * 100).roundToInt()}%" else "",
+            postureHint = hint,
+            exerciseTag = "ซิทอัพ",
+            repAmplitude = currentRepPeakAmplitude
+        )
     }
 
     /**
@@ -1065,12 +1353,12 @@ internal class BiomechanicalRepEngine {
      * MUST show BOTH overhead arms AND wide leg stance simultaneously on the open phase,
      * and hands-down + feet-together on the close phase. Arm waving while feet stay narrow gives 0 reps!
      */
-    private fun detectJumpingJackInternal(
+    private fun detectJumpingJackDetailed(
         points: Map<Int, PointF>,
         bodyScale: Float,
         sensitivity: DetectionSensitivity,
         now: Long
-    ): Triple<Int, String, Boolean> {
+    ): RepEvalOutput {
         val shoulderMid = mid(points[PoseLandmark.LEFT_SHOULDER], points[PoseLandmark.RIGHT_SHOULDER])
         val lWrist = points[PoseLandmark.LEFT_WRIST]
         val rWrist = points[PoseLandmark.RIGHT_WRIST]
@@ -1080,7 +1368,7 @@ internal class BiomechanicalRepEngine {
         val rKnee = points[PoseLandmark.RIGHT_KNEE]
 
         if (shoulderMid == null || lWrist == null || rWrist == null) {
-            return Triple(0, "", false)
+            return RepEvalOutput(exerciseTag = "กระโดดตบ")
         }
 
         val legSpreadPx = when {
@@ -1088,7 +1376,10 @@ internal class BiomechanicalRepEngine {
             lKnee != null && rKnee != null -> abs(lKnee.x - rKnee.x)
             else -> {
                 jackState = 0
-                return Triple(0, "กระโดดตบ: ถอยให้เห็นขากางออกด้วย จึงจะนับครั้ง", false)
+                return RepEvalOutput(
+                    postureHint = "กระโดดตบ: ถอยให้เห็นขากางออกด้วย จึงจะนับครั้ง",
+                    exerciseTag = "กระโดดตบ"
+                )
             }
         }
 
@@ -1097,10 +1388,14 @@ internal class BiomechanicalRepEngine {
         val hipWidth = if (lHip != null && rHip != null) abs(lHip.x - rHip.x) else bodyScale * 0.40f
         val baseScale = bodyScale.coerceAtLeast(36f)
 
-        val bothHandsUp = lWrist.y < shoulderMid.y - 0.22f * baseScale &&
-            rWrist.y < shoulderMid.y - 0.22f * baseScale
-        val bothHandsDown = lWrist.y > shoulderMid.y + 0.16f * baseScale &&
-            rWrist.y > shoulderMid.y + 0.16f * baseScale
+        val lElbow = points[PoseLandmark.LEFT_ELBOW]
+        val rElbow = points[PoseLandmark.RIGHT_ELBOW]
+        val bothHandsUp = (lWrist.y < shoulderMid.y - 0.14f * baseScale ||
+            (lElbow != null && lElbow.y < shoulderMid.y - 0.12f * baseScale)) &&
+            (rWrist.y < shoulderMid.y - 0.14f * baseScale ||
+                (rElbow != null && rElbow.y < shoulderMid.y - 0.12f * baseScale))
+        val bothHandsDown = lWrist.y > shoulderMid.y + 0.14f * baseScale &&
+            rWrist.y > shoulderMid.y + 0.14f * baseScale
 
         if (jackState == 0 && bothHandsDown) {
             val prevSpread = baselineLegSpread ?: legSpreadPx
@@ -1108,17 +1403,22 @@ internal class BiomechanicalRepEngine {
         }
         val baseSpread = baselineLegSpread ?: hipWidth
         val sens = sensitivity.motionDeadzoneScale
-
-        val legsSpreadWide = legSpreadPx > max(
-            hipWidth * (1.38f * sens).coerceIn(1.22f, 1.58f),
-            max(baseScale * 0.46f, baseSpread * 1.40f)
+        val wideSpreadTarget = max(
+            hipWidth * (1.28f * sens).coerceIn(1.16f, 1.48f),
+            max(baseScale * 0.42f, baseSpread * 1.28f)
         )
-        val legsTogether = legSpreadPx < max(hipWidth * 1.24f, baseSpread * 1.22f)
+
+        val legsSpreadWide = legSpreadPx > wideSpreadTarget
+        val legsTogether = legSpreadPx < max(hipWidth * 1.22f, baseSpread * 1.20f)
 
         val avgLift = ((shoulderMid.y - lWrist.y) + (shoulderMid.y - rWrist.y)) / (2f * baseScale)
         if (jackState == 1) {
             currentRepPeakAmplitude = max(currentRepPeakAmplitude, avgLift)
         }
+
+        val armProg = ((avgLift + 0.14f) / 0.34f).coerceIn(0f, 1f)
+        val legProg = ((legSpreadPx - baseSpread) / (wideSpreadTarget - baseSpread).coerceAtLeast(10f)).coerceIn(0f, 1f)
+        val rawProg = (armProg * 0.5f + legProg * 0.5f).coerceIn(0f, 1f)
 
         var rep = 0
         var hint = ""
@@ -1140,7 +1440,15 @@ internal class BiomechanicalRepEngine {
             hint = "กระโดดตบ: หุบขาและลดแขนลง"
         }
 
-        return Triple(rep, hint, jackState == 1)
+        val finalProg = if (jackState == 1) max(rawProg, 0.85f) else rawProg
+        return RepEvalOutput(
+            repDelta = rep,
+            repPhaseProgress = finalProg,
+            repPhaseLabel = if (jackState == 1) "หุบลง!" else if (finalProg >= 0.35f) "กาง ${(finalProg * 100).roundToInt()}%" else "",
+            postureHint = hint,
+            exerciseTag = "กระโดดตบ",
+            repAmplitude = currentRepPeakAmplitude
+        )
     }
 
     private fun detectAlternatingSteps(
@@ -1188,17 +1496,17 @@ internal class BiomechanicalRepEngine {
         return step
     }
 
-    private fun detectRacketSwing(
+    private fun detectRacketSwingDetailed(
         points: Map<Int, PointF>,
         bodyScale: Float,
         sensitivity: DetectionSensitivity,
         now: Long
-    ): Int {
-        val shoulderMid = mid(points[PoseLandmark.LEFT_SHOULDER], points[PoseLandmark.RIGHT_SHOULDER]) ?: return 0
+    ): Pair<Int, Float> {
+        val shoulderMid = mid(points[PoseLandmark.LEFT_SHOULDER], points[PoseLandmark.RIGHT_SHOULDER]) ?: return 0 to 0f
         val lWrist = points[PoseLandmark.LEFT_WRIST]
         val rWrist = points[PoseLandmark.RIGHT_WRIST]
         val topWristY = minOf(lWrist?.y ?: Float.MAX_VALUE, rWrist?.y ?: Float.MAX_VALUE)
-        if (topWristY == Float.MAX_VALUE) return 0
+        if (topWristY == Float.MAX_VALUE) return 0 to 0f
 
         val liftAboveShoulder = (shoulderMid.y - topWristY) / bodyScale
         if (swingState == 1) {
@@ -1216,21 +1524,22 @@ internal class BiomechanicalRepEngine {
             rep = 1
             lastRepMillis = now
         }
-        return rep
+        val prog = if (swingState == 1) 1f else ((liftAboveShoulder + 0.16f) / 0.30f).coerceIn(0f, 0.99f)
+        return rep to prog
     }
 
-    private fun detectCyclingPedal(
+    private fun detectCyclingPedalDetailed(
         points: Map<Int, PointF>,
         bodyScale: Float,
         isMoving: Boolean,
         now: Long
-    ): Int {
-        if (!isMoving) return 0
-        val hipMid = mid(points[PoseLandmark.LEFT_HIP], points[PoseLandmark.RIGHT_HIP]) ?: return 0
+    ): Pair<Int, Float> {
+        if (!isMoving) return 0 to 0f
+        val hipMid = mid(points[PoseLandmark.LEFT_HIP], points[PoseLandmark.RIGHT_HIP]) ?: return 0 to 0f
         val lKnee = points[PoseLandmark.LEFT_KNEE]
         val rKnee = points[PoseLandmark.RIGHT_KNEE]
         val highKneeY = minOf(lKnee?.y ?: Float.MAX_VALUE, rKnee?.y ?: Float.MAX_VALUE)
-        if (highKneeY == Float.MAX_VALUE) return 0
+        if (highKneeY == Float.MAX_VALUE) return 0 to 0f
 
         val kneeHeightRelHip = (hipMid.y - highKneeY) / bodyScale
         if (pedalState == 1) {
@@ -1248,43 +1557,106 @@ internal class BiomechanicalRepEngine {
             rep = 1
             lastRepMillis = now
         }
-        return rep
+        val prog = ((kneeHeightRelHip - downThresh) / (upThresh - downThresh)).coerceIn(0f, 1f)
+        return rep to prog
     }
 
-    internal fun measureElbowAngleDeg(points: Map<Int, PointF>): Float? {
-        val leftAngle = tripletAngleIfValid(
-            points[PoseLandmark.LEFT_SHOULDER],
-            points[PoseLandmark.LEFT_ELBOW],
-            points[PoseLandmark.LEFT_WRIST]
+    internal fun measureElbowAngleDeg(
+        points: Map<Int, PointF>,
+        points3D: Map<Int, Point3D> = emptyMap(),
+        confidences: Map<Int, Float> = emptyMap()
+    ): Float? {
+        val leftAngle = tripletJointAngleDeg(
+            PoseLandmark.LEFT_SHOULDER, PoseLandmark.LEFT_ELBOW, PoseLandmark.LEFT_WRIST, points, points3D
         )
-        val rightAngle = tripletAngleIfValid(
-            points[PoseLandmark.RIGHT_SHOULDER],
-            points[PoseLandmark.RIGHT_ELBOW],
-            points[PoseLandmark.RIGHT_WRIST]
+        val rightAngle = tripletJointAngleDeg(
+            PoseLandmark.RIGHT_SHOULDER, PoseLandmark.RIGHT_ELBOW, PoseLandmark.RIGHT_WRIST, points, points3D
         )
+        val leftConf = sideConfidence(
+            PoseLandmark.LEFT_SHOULDER, PoseLandmark.LEFT_ELBOW, PoseLandmark.LEFT_WRIST, confidences
+        )
+        val rightConf = sideConfidence(
+            PoseLandmark.RIGHT_SHOULDER, PoseLandmark.RIGHT_ELBOW, PoseLandmark.RIGHT_WRIST, confidences
+        )
+        return mergeBilateralAngles(leftAngle, leftConf, rightAngle, rightConf)
+    }
+
+    internal fun measureKneeAngleDeg(
+        points: Map<Int, PointF>,
+        points3D: Map<Int, Point3D> = emptyMap(),
+        confidences: Map<Int, Float> = emptyMap()
+    ): Float? {
+        val leftAngle = tripletJointAngleDeg(
+            PoseLandmark.LEFT_HIP, PoseLandmark.LEFT_KNEE, PoseLandmark.LEFT_ANKLE, points, points3D
+        )
+        val rightAngle = tripletJointAngleDeg(
+            PoseLandmark.RIGHT_HIP, PoseLandmark.RIGHT_KNEE, PoseLandmark.RIGHT_ANKLE, points, points3D
+        )
+        val leftConf = sideConfidence(
+            PoseLandmark.LEFT_HIP, PoseLandmark.LEFT_KNEE, PoseLandmark.LEFT_ANKLE, confidences
+        )
+        val rightConf = sideConfidence(
+            PoseLandmark.RIGHT_HIP, PoseLandmark.RIGHT_KNEE, PoseLandmark.RIGHT_ANKLE, confidences
+        )
+        return mergeBilateralAngles(leftAngle, leftConf, rightAngle, rightConf)
+    }
+
+    private fun sideConfidence(t1: Int, t2: Int, t3: Int, confidences: Map<Int, Float>): Float? {
+        if (confidences.isEmpty()) return null
+        val c1 = confidences[t1] ?: return null
+        val c2 = confidences[t2] ?: return null
+        val c3 = confidences[t3] ?: return null
+        return minOf(c1, c2, c3) * 0.5f + ((c1 + c2 + c3) / 3f) * 0.5f
+    }
+
+    private fun mergeBilateralAngles(
+        leftAngle: Float?,
+        leftConf: Float?,
+        rightAngle: Float?,
+        rightConf: Float?
+    ): Float? {
+        if (leftAngle == null) return rightAngle
+        if (rightAngle == null) return leftAngle
+        if (leftConf == null || rightConf == null) return (leftAngle + rightAngle) / 2f
+        val diff = abs(leftConf - rightConf)
         return when {
-            leftAngle != null && rightAngle != null -> (leftAngle + rightAngle) / 2f
-            leftAngle != null -> leftAngle
-            else -> rightAngle
+            diff >= 0.14f -> if (leftConf > rightConf) leftAngle else rightAngle
+            else -> {
+                val sum = (leftConf + rightConf).coerceAtLeast(0.01f)
+                (leftAngle * leftConf + rightAngle * rightConf) / sum
+            }
         }
     }
 
-    internal fun measureKneeAngleDeg(points: Map<Int, PointF>): Float? {
-        val leftAngle = tripletAngleIfValid(
-            points[PoseLandmark.LEFT_HIP],
-            points[PoseLandmark.LEFT_KNEE],
-            points[PoseLandmark.LEFT_ANKLE]
-        )
-        val rightAngle = tripletAngleIfValid(
-            points[PoseLandmark.RIGHT_HIP],
-            points[PoseLandmark.RIGHT_KNEE],
-            points[PoseLandmark.RIGHT_ANKLE]
-        )
-        return when {
-            leftAngle != null && rightAngle != null -> (leftAngle + rightAngle) / 2f
-            leftAngle != null -> leftAngle
-            else -> rightAngle
+    private fun tripletJointAngleDeg(
+        t1: Int,
+        t2: Int,
+        t3: Int,
+        points: Map<Int, PointF>,
+        points3D: Map<Int, Point3D>
+    ): Float? {
+        val a3 = points3D[t1]
+        val b3 = points3D[t2]
+        val c3 = points3D[t3]
+        if (a3 != null && b3 != null && c3 != null) {
+            val angle3d = tripletAngle3DIfValid(a3, b3, c3)
+            if (angle3d != null) return angle3d
         }
+        return tripletAngleIfValid(points[t1], points[t2], points[t3])
+    }
+
+    private fun tripletAngle3DIfValid(a: Point3D, b: Point3D, c: Point3D): Float? {
+        val v1x = a.x - b.x
+        val v1y = a.y - b.y
+        val v1z = a.z - b.z
+        val v2x = c.x - b.x
+        val v2y = c.y - b.y
+        val v2z = c.z - b.z
+        val m1 = sqrt(v1x * v1x + v1y * v1y + v1z * v1z)
+        val m2 = sqrt(v2x * v2x + v2y * v2y + v2z * v2z)
+        if (m1 < 12f || m2 < 12f) return null
+        val cosTheta = ((v1x * v2x + v1y * v2y + v1z * v2z) / (m1 * m2)).coerceIn(-1f, 1f)
+        return Math.toDegrees(acos(cosTheta.toDouble())).toFloat()
     }
 
     private fun tripletAngleIfValid(a: PointF?, b: PointF?, c: PointF?): Float? {
@@ -1307,6 +1679,13 @@ internal class BiomechanicalRepEngine {
         return Math.toDegrees(acos(cosTheta.toDouble())).toFloat()
     }
 
+    private fun mid3D(a: Point3D?, b: Point3D?): Point3D? = when {
+        a != null && b != null -> Point3D((a.x + b.x) / 2f, (a.y + b.y) / 2f, (a.z + b.z) / 2f)
+        a != null -> a
+        b != null -> b
+        else -> null
+    }
+
     private fun mid(a: PointF?, b: PointF?): PointF? = when {
         a != null && b != null -> PointF((a.x + b.x) / 2f, (a.y + b.y) / 2f)
         a != null -> a
@@ -1324,8 +1703,9 @@ class PoseMotionAnalyzer(
 ) : ImageAnalysis.Analyzer {
 
     private val detector = PoseDetection.getClient(
-        PoseDetectorOptions.Builder()
-            .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
+        AccuratePoseDetectorOptions.Builder()
+            .setDetectorMode(AccuratePoseDetectorOptions.STREAM_MODE)
+            .setPreferredHardwareConfigs(AccuratePoseDetectorOptions.CPU_GPU)
             .build()
     )
 
@@ -1334,9 +1714,12 @@ class PoseMotionAnalyzer(
     private val repEngine = BiomechanicalRepEngine()
     private var lastAnalyzedSport: SportType? = null
     private var lastExerciseFocus: GeneralExerciseFocus? = null
+    private val oneEuroFilters = mutableMapOf<Int, OneEuroFilter3D>()
     private val smoothedJoints = mutableMapOf<Int, PointF>()
+    private val smoothedJoints3D = mutableMapOf<Int, Point3D>()
     private val missedFrames = mutableMapOf<Int, Int>()
     private var prevSmoothedJoints: Map<Int, PointF> = emptyMap()
+    private var lastFrameMillis: Long = 0L
     private var activeMotionStreak: Int = 0
     private var lastMotionSeenMillis: Long = 0L
 
@@ -1355,7 +1738,9 @@ class PoseMotionAnalyzer(
 
     fun lockSubjectAtTap(tapX: Float, tapY: Float, viewW: Float, viewH: Float) {
         synchronized(stateLock) {
+            oneEuroFilters.clear()
             smoothedJoints.clear()
+            smoothedJoints3D.clear()
             missedFrames.clear()
             prevSmoothedJoints = emptyMap()
             anchorTracker.lockAtScreenTap(
@@ -1372,7 +1757,9 @@ class PoseMotionAnalyzer(
 
     fun relockPrimarySubject() {
         synchronized(stateLock) {
+            oneEuroFilters.clear()
             smoothedJoints.clear()
+            smoothedJoints3D.clear()
             missedFrames.clear()
             prevSmoothedJoints = emptyMap()
             activeMotionStreak = 0
@@ -1497,8 +1884,10 @@ class PoseMotionAnalyzer(
             PoseLandmark.RIGHT_ANKLE
         )
 
-        // Step 1: Extract raw unsmoothed landmarks mapped back into full upright image space
+        // Step 1: Extract raw unsmoothed 2D + 3D landmarks and per-joint confidences
         val rawCandidatePoints = mutableMapOf<Int, PointF>()
+        val rawCandidatePoints3D = mutableMapOf<Int, Point3D>()
+        val jointConfidences = mutableMapOf<Int, Float>()
         var confidenceSum = 0f
         var confidenceCount = 0
 
@@ -1512,10 +1901,13 @@ class PoseMotionAnalyzer(
             if (landmark != null && landmark.inFrameLikelihood >= minConfidence && imgW > 0f && imgH > 0f) {
                 val px = landmark.position.x + offsetX
                 val py = landmark.position.y + offsetY
-                val inBounds = px >= -0.04f * imgW && px <= 1.04f * imgW &&
-                    py >= -0.04f * imgH && py <= 1.04f * imgH
+                val inBounds = px >= -0.06f * imgW && px <= 1.06f * imgW &&
+                    py >= -0.10f * imgH && py <= 1.10f * imgH
                 if (inBounds) {
                     rawCandidatePoints[type] = PointF(px, py)
+                    val p3d = landmark.position3D
+                    rawCandidatePoints3D[type] = Point3D(p3d.x + offsetX, p3d.y + offsetY, p3d.z)
+                    jointConfidences[type] = landmark.inFrameLikelihood
                     confidenceSum += landmark.inFrameLikelihood
                     confidenceCount++
                 }
@@ -1529,6 +1921,8 @@ class PoseMotionAnalyzer(
         val hasRawBody = rawCandidatePoints.size >= 5 && (hasShoulders || hasHips)
         val avgConfPct = if (confidenceCount > 0) ((confidenceSum / confidenceCount) * 100f).roundToInt().coerceIn(0, 99) else 0
         val now = System.currentTimeMillis()
+        val dtSec = if (lastFrameMillis > 0L) ((now - lastFrameMillis) / 1000f).coerceIn(0.01f, 0.25f) else 0.033f
+        lastFrameMillis = now
 
         if (!hasRawBody) {
             prevSmoothedJoints = emptyMap()
@@ -1562,7 +1956,7 @@ class PoseMotionAnalyzer(
             )
         }
 
-        // Step 2: Subject Anchor Lock Gate BEFORE updating smoothedJoints / rep counters!
+        // Step 2: Subject Anchor Lock Gate BEFORE updating filtered joints / rep counters!
         val candidateTorsoCenter = estimateTorsoCenter(rawCandidatePoints)
         val candidateScale = estimateBodyScalePx(rawCandidatePoints, imgH)
         val isAcceptedSubject = anchorTracker.validateAndTrack(
@@ -1575,7 +1969,6 @@ class PoseMotionAnalyzer(
         )
 
         if (!isAcceptedSubject) {
-            // Freeze motion & rep counting cleanly so passerby cannot add fake steps/reps or corrupt smoothed joints!
             activeMotionStreak = 0
             return@synchronized PoseSkeletonSnapshot(
                 rawPoints = smoothedJoints.toMap(),
@@ -1601,24 +1994,24 @@ class PoseMotionAnalyzer(
             )
         }
 
-        // Step 3: Smooth validated joints for the real user
+        // Step 3: Adaptive One-Euro 3D joint filtering (zero jitter at rest, zero lag during fast jumps/reps)
+        val refScale = candidateScale.coerceAtLeast(48f)
         val currentPoints = mutableMapOf<Int, PointF>()
+        val currentPoints3D = mutableMapOf<Int, Point3D>()
         for (type in trackedTypes) {
-            val rawPt = rawCandidatePoints[type]
-            if (rawPt != null) {
-                val prev = smoothedJoints[type]
-                val smoothed = if (prev == null) {
-                    rawPt
-                } else {
-                    val alpha = if (type in coreTypes) 0.44f else 0.56f
-                    PointF(
-                        prev.x * (1f - alpha) + rawPt.x * alpha,
-                        prev.y * (1f - alpha) + rawPt.y * alpha
-                    )
+            val raw3D = rawCandidatePoints3D[type]
+            if (raw3D != null) {
+                val filter = oneEuroFilters.getOrPut(type) {
+                    if (type in coreTypes) OneEuroFilter3D(minCutoff = 1.45f, beta = 0.040f)
+                    else OneEuroFilter3D(minCutoff = 1.75f, beta = 0.055f)
                 }
-                smoothedJoints[type] = smoothed
+                val filtered3D = filter.filter(raw3D, dtSec, refScale)
+                val filtered2D = PointF(filtered3D.x, filtered3D.y)
+                smoothedJoints[type] = filtered2D
+                smoothedJoints3D[type] = filtered3D
                 missedFrames[type] = 0
-                currentPoints[type] = smoothed
+                currentPoints[type] = filtered2D
+                currentPoints3D[type] = filtered3D
             } else {
                 handleMissingJoint(type)
             }
@@ -1707,7 +2100,7 @@ class PoseMotionAnalyzer(
         val isMoving = instantConfirmedMoving || (now - lastMotionSeenMillis) <= 520L
         val poseIntensity = ((effectiveDisp - motionThreshold * 0.65f) / 0.13f).coerceIn(0f, 1f)
 
-        // Dispatch to strict biomechanical detector BEFORE final symmetry/hint assembly
+        // Dispatch to strict 3D biomechanical detector BEFORE final symmetry/hint assembly
         val eval = repEngine.evaluate(
             sport = sport,
             focus = focus,
@@ -1715,7 +2108,9 @@ class PoseMotionAnalyzer(
             bodyScale = bodyScale,
             isWholeBodyMoving = isMoving && avgCoreLegDisp > motionThreshold * 0.72f,
             sensitivity = sensitivity,
-            now = now
+            now = now,
+            points3D = currentPoints3D,
+            confidences = jointConfidences
         )
 
         val effectiveMoving = if (requiresWholeBodyMotion) {
@@ -1749,6 +2144,8 @@ class PoseMotionAnalyzer(
             motionIntensity = if (effectiveMoving) poseIntensity.coerceAtLeast(0.20f) else if (eval.isPlankHoldingValid) 0.48f else 0f,
             stepDelta = eval.stepDelta,
             repDelta = eval.repDelta,
+            repPhaseProgress = eval.repPhaseProgress,
+            repPhaseLabel = eval.repPhaseLabel,
             isPlankHoldingValid = eval.isPlankHoldingValid,
             visibleJointCount = currentPoints.size,
             confidencePercent = avgConfPct,
@@ -1879,8 +2276,10 @@ class PoseMotionAnalyzer(
     private fun handleMissingJoint(type: Int) {
         val count = (missedFrames[type] ?: 0) + 1
         missedFrames[type] = count
-        if (count > 4) {
+        if (count > 2) {
             smoothedJoints.remove(type)
+            smoothedJoints3D.remove(type)
+            oneEuroFilters.remove(type)
         }
     }
 
@@ -1918,9 +2317,12 @@ class PoseMotionAnalyzer(
     }
 
     private fun resetInternalState() {
+        oneEuroFilters.clear()
         smoothedJoints.clear()
+        smoothedJoints3D.clear()
         missedFrames.clear()
         prevSmoothedJoints = emptyMap()
+        lastFrameMillis = 0L
         activeMotionStreak = 0
         lastMotionSeenMillis = 0L
         repEngine.reset()
@@ -1951,15 +2353,18 @@ class StretchPoseAnalyzer(
 ) : ImageAnalysis.Analyzer {
 
     private val detector = PoseDetection.getClient(
-        PoseDetectorOptions.Builder()
-            .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
+        AccuratePoseDetectorOptions.Builder()
+            .setDetectorMode(AccuratePoseDetectorOptions.STREAM_MODE)
+            .setPreferredHardwareConfigs(AccuratePoseDetectorOptions.CPU_GPU)
             .build()
     )
 
     private val stateLock = Any()
     private val anchorTracker = SubjectAnchorTracker()
+    private val oneEuroFilters = mutableMapOf<Int, OneEuroFilter3D>()
     private val smoothedJoints = mutableMapOf<Int, PointF>()
     private var smoothedScore = 60f
+    private var lastFrameMillis = 0L
 
     @Volatile
     private var lastImgW: Float = 480f
@@ -1968,6 +2373,7 @@ class StretchPoseAnalyzer(
 
     fun lockSubjectAtTap(tapX: Float, tapY: Float, viewW: Float, viewH: Float) {
         synchronized(stateLock) {
+            oneEuroFilters.clear()
             smoothedJoints.clear()
             anchorTracker.lockAtScreenTap(
                 tapX = tapX,
@@ -1983,6 +2389,7 @@ class StretchPoseAnalyzer(
 
     fun relockPrimarySubject() {
         synchronized(stateLock) {
+            oneEuroFilters.clear()
             smoothedJoints.clear()
             anchorTracker.clearLock()
         }
@@ -2145,10 +2552,14 @@ class StretchPoseAnalyzer(
             )
         }
 
+        val dtSec = if (lastFrameMillis > 0L) ((now - lastFrameMillis) / 1000f).coerceIn(0.01f, 0.25f) else 0.033f
+        lastFrameMillis = now
+
         val points = mutableMapOf<Int, PointF>()
         for ((t, rawPt) in rawPoints) {
-            val prev = smoothedJoints[t]
-            val pt = if (prev == null) rawPt else PointF(prev.x * 0.5f + rawPt.x * 0.5f, prev.y * 0.5f + rawPt.y * 0.5f)
+            val filter = oneEuroFilters.getOrPut(t) { OneEuroFilter3D(minCutoff = 1.4f, beta = 0.038f) }
+            val filtered = filter.filter(Point3D(rawPt.x, rawPt.y, 0f), dtSec, bodyScale)
+            val pt = PointF(filtered.x, filtered.y)
             smoothedJoints[t] = pt
             points[t] = pt
         }
@@ -2276,8 +2687,10 @@ class StretchPoseAnalyzer(
 
     fun reset() {
         synchronized(stateLock) {
+            oneEuroFilters.clear()
             smoothedJoints.clear()
             smoothedScore = 60f
+            lastFrameMillis = 0L
             anchorTracker.clearLock()
         }
     }

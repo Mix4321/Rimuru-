@@ -1,0 +1,199 @@
+{
+  "entities": {
+    "UserCloudProfile": {
+      "title": "UserCloudProfile",
+      "description": "Authenticated athlete profile, body metrics, daily goal mode, and streak metadata synced to Cloud Firestore.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Athlete display name shown on dashboard and account card."
+        },
+        "email": {
+          "type": "string",
+          "description": "Optional Google account email (owner-private PII)."
+        },
+        "dailyGoalMinutes": {
+          "type": "integer",
+          "description": "Daily target minutes (0 means Free Duration mode)."
+        },
+        "weightKg": {
+          "type": "number",
+          "description": "Body weight in kg used for MET calorie calculation."
+        },
+        "heightCm": {
+          "type": "number",
+          "description": "Body height in cm used for stride length calibration."
+        },
+        "currentStreak": {
+          "type": "integer",
+          "description": "Current consecutive active days streak."
+        },
+        "longestStreak": {
+          "type": "integer",
+          "description": "Longest consecutive active days streak."
+        },
+        "lastActiveDate": {
+          "type": "string",
+          "description": "ISO yyyy-MM-dd date string of latest workout."
+        },
+        "onboardingCompleted": {
+          "type": "boolean",
+          "description": "Whether initial registration/body profile setup is finished."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "dailyGoalMinutes",
+        "weightKg",
+        "heightCm",
+        "currentStreak",
+        "longestStreak",
+        "onboardingCompleted",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WorkoutCloudSession": {
+      "title": "WorkoutCloudSession",
+      "description": "Completed workout session synced under the authenticated user's private workout history.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner."
+        },
+        "sportType": {
+          "type": "string",
+          "enum": [
+            "RUNNING",
+            "WALKING",
+            "JUMP_ROPE",
+            "FOOTBALL",
+            "BASKETBALL",
+            "BADMINTON",
+            "CYCLING",
+            "GENERAL"
+          ],
+          "description": "SportType enum key."
+        },
+        "durationSeconds": {
+          "type": "integer",
+          "description": "Total session elapsed seconds (>= 5)."
+        },
+        "caloriesBurned": {
+          "type": "integer",
+          "description": "Total calories burned (kcal)."
+        },
+        "steps": {
+          "type": "integer",
+          "description": "Detected real steps."
+        },
+        "distanceMeters": {
+          "type": "integer",
+          "description": "Measured distance in meters."
+        },
+        "repsCount": {
+          "type": "integer",
+          "description": "Detected biomechanics reps/jumps count."
+        },
+        "trackingMode": {
+          "type": "string",
+          "enum": ["CAMERA_AI", "SENSOR_GPS", "MANUAL"],
+          "description": "TrackingMode enum key."
+        },
+        "motionActiveSeconds": {
+          "type": "integer",
+          "description": "Seconds where active physical motion was verified."
+        },
+        "activityDate": {
+          "type": "string",
+          "description": "Local date yyyy-MM-dd."
+        },
+        "startedAtMillis": {
+          "type": "integer",
+          "description": "Epoch milliseconds when workout started."
+        },
+        "endedAtMillis": {
+          "type": "integer",
+          "description": "Epoch milliseconds when workout finished."
+        },
+        "avgFormScore": {
+          "type": "integer",
+          "description": "Average AI posture form score (0-100)."
+        },
+        "avgSymmetryPercent": {
+          "type": "integer",
+          "description": "Average left/right movement symmetry percent (0-100)."
+        },
+        "routeJson": {
+          "type": "string",
+          "description": "Compact serialized GPS route coordinate array."
+        },
+        "workoutSubType": {
+          "type": "string",
+          "enum": ["FREE", "HIIT"],
+          "description": "Free duration vs HIIT workout subtype."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "userId",
+        "sportType",
+        "durationSeconds",
+        "caloriesBurned",
+        "steps",
+        "distanceMeters",
+        "repsCount",
+        "trackingMode",
+        "motionActiveSeconds",
+        "activityDate",
+        "startedAtMillis",
+        "endedAtMillis",
+        "avgFormScore",
+        "avgSymmetryPercent",
+        "workoutSubType",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserCloudProfile"
+      },
+      "description": "Owner-private user profile, body metrics, and streak state."
+    },
+    "/users/{userId}/workouts/{workoutId}": {
+      "schema": {
+        "$ref": "#/entities/WorkoutCloudSession"
+      },
+      "description": "Owner-private workout history subcollection."
+    }
+  }
+}

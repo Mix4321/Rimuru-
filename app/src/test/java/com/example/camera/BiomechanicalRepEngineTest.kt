@@ -442,4 +442,152 @@ class BiomechanicalRepEngineTest {
         }
         assertEquals("Real split-stance lunges should count 2 reps", 2, reps)
     }
+
+    @Test
+    fun `front-facing squats with Z-foreshortened 2D knee angle count exact reps`() {
+        val engine = BiomechanicalRepEngine()
+        var reps = 0
+        var t = 90_000L
+
+        repeat(2) {
+            // Standing upright
+            repeat(4) {
+                t += 120L
+                val pts = uprightPose(hipY = 360f, kneeY = 470f, ankleY = 570f)
+                reps += engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.SQUAT, pts, 140f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+            // Front-facing squat bottom: hips drop right down to knee height, while 2D knee angle stays ~145 deg
+            repeat(4) {
+                t += 120L
+                val pts = uprightPose(
+                    shoulderY = 315f,
+                    hipY = 445f,
+                    kneeY = 472f,
+                    ankleY = 570f
+                )
+                reps += engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.SQUAT, pts, 140f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+            // Return to standing
+            repeat(4) {
+                t += 120L
+                val pts = uprightPose(hipY = 360f, kneeY = 470f, ankleY = 570f)
+                reps += engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.SQUAT, pts, 140f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+        }
+        assertEquals("Front-view squats must count all 2 reps", 2, reps)
+    }
+
+    @Test
+    fun `fast jump rope cadence every 300ms counts all jumps without skipping`() {
+        val engine = BiomechanicalRepEngine()
+        var reps = 0
+        var t = 100_000L
+
+        // Establish baseline
+        repeat(5) {
+            t += 50L
+            reps += engine.evaluate(SportType.JUMP_ROPE, GeneralExerciseFocus.AUTO, uprightPose(), 140f, true, DetectionSensitivity.BALANCED, t).repDelta
+        }
+
+        // 4 fast bounces at ~300ms per cycle (200 BPM cadence)
+        repeat(4) {
+            // Airborne peak (~150ms)
+            repeat(2) {
+                t += 75L
+                val peak = uprightPose(hipY = 342f, shoulderY = 202f, kneeY = 452f, ankleY = 552f)
+                reps += engine.evaluate(SportType.JUMP_ROPE, GeneralExerciseFocus.AUTO, peak, 140f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+            // Quick ground contact (~150ms)
+            repeat(2) {
+                t += 75L
+                reps += engine.evaluate(SportType.JUMP_ROPE, GeneralExerciseFocus.AUTO, uprightPose(), 140f, true, DetectionSensitivity.BALANCED, t).repDelta
+            }
+        }
+        assertEquals("Fast jump rope cadence should count all 4 jumps", 4, reps)
+    }
+
+    @Test
+    fun `one-euro filter suppresses stationary micro jitter yet tracks fast jump with minimal lag`() {
+        val filter = OneEuroFilter3D(minCutoff = 1.5f, beta = 0.045f)
+        val dt = 0.033f
+        val bodyScale = 140f
+
+        // Stationary jitter +/- 4px around 300f -> output stays within tight < 2.2px band
+        var maxDeviation = 0f
+        repeat(20) { i ->
+            val rawY = 300f + if (i % 2 == 0) 4f else -4f
+            val out = filter.filter(Point3D(240f, rawY, 0f), dt, bodyScale)
+            if (i >= 4) {
+                maxDeviation = kotlin.math.max(maxDeviation, kotlin.math.abs(out.y - 300f))
+            }
+        }
+        assertTrue("Stationary jitter should be heavily damped (<2.5px), got $maxDeviation", maxDeviation < 2.5f)
+
+        // Sudden explosive jump upward by 80px -> within 2 frames responds strongly (>65% of jump)
+        val f1 = filter.filter(Point3D(240f, 220f, 0f), dt, bodyScale)
+        val f2 = filter.filter(Point3D(240f, 220f, 0f), dt, bodyScale)
+        assertTrue("First explosive jump frame should move rapidly below 275f, got ${f1.y}", f1.y < 275f)
+        assertTrue("Second explosive jump frame should track near 220f (<248f), got ${f2.y}", f2.y < 248f)
+    }
+
+    @Test
+    fun `3D joint angle detects 90 degree squat knee bend even when 2D front view appears straight`() {
+        val engine = BiomechanicalRepEngine()
+        val standing2d = uprightPose(hipY = 360f, kneeY = 470f, ankleY = 570f)
+        val standing3d = standing2d.mapValues { Point3D(it.value.x, it.value.y, 0f) }
+
+        // Knee pushed toward camera (-95 in Z) while 2D x,y look nearly vertical (175 deg in 2D!)
+        val squatBottom3d = standing2d.mapValues { (k, p) ->
+            when (k) {
+                PoseLandmark.LEFT_KNEE, PoseLandmark.RIGHT_KNEE -> Point3D(p.x, p.y - 10f, -105f)
+                PoseLandmark.LEFT_HIP, PoseLandmark.RIGHT_HIP -> Point3D(p.x, p.y + 85f, 35f)
+                else -> Point3D(p.x, p.y, 0f)
+            }
+        }
+
+        val angle2dOnly = engine.measureKneeAngleDeg(standing2d)!!
+        val angle3dBent = engine.measureKneeAngleDeg(standing2d, squatBottom3d)!!
+
+        assertTrue("2D alone looks >165 deg straight: $angle2dOnly", angle2dOnly > 165f)
+        assertTrue("3D geometry must capture true deep knee flexion (<105 deg): $angle3dBent", angle3dBent < 105f)
+
+        // Verify rep phase depth progress is > 0.75 when deep in squat
+        var t = 120_000L
+        repeat(4) {
+            t += 100L
+            engine.evaluate(SportType.GENERAL, GeneralExerciseFocus.SQUAT, standing2d, 140f, true, DetectionSensitivity.BALANCED, t, standing3d)
+        }
+        t += 100L
+        val deepEval = engine.evaluate(
+            SportType.GENERAL, GeneralExerciseFocus.SQUAT,
+            uprightPose(shoulderY = 300f, hipY = 435f, kneeY = 460f, ankleY = 570f),
+            140f, true, DetectionSensitivity.BALANCED, t, squatBottom3d
+        )
+        assertTrue("Deep squat should report high repPhaseProgress >= 0.75, got ${deepEval.repPhaseProgress}", deepEval.repPhaseProgress >= 0.75f)
+    }
+
+    @Test
+    fun `occluded far-side arm noise does not corrupt near-side push-up elbow angle`() {
+        val engine = BiomechanicalRepEngine()
+        // Left arm (near camera) clearly bent at 85 deg; Right arm (occluded behind torso) locked straight 175 deg with low conf
+        val pts = mapOf(
+            PoseLandmark.LEFT_SHOULDER to PointF(150f, 360f),
+            PoseLandmark.LEFT_ELBOW to PointF(210f, 415f),
+            PoseLandmark.LEFT_WRIST to PointF(145f, 475f),
+            PoseLandmark.RIGHT_SHOULDER to PointF(160f, 365f),
+            PoseLandmark.RIGHT_ELBOW to PointF(162f, 420f),
+            PoseLandmark.RIGHT_WRIST to PointF(164f, 475f)
+        )
+        val confidences = mapOf(
+            PoseLandmark.LEFT_SHOULDER to 0.94f,
+            PoseLandmark.LEFT_ELBOW to 0.91f,
+            PoseLandmark.LEFT_WRIST to 0.90f,
+            PoseLandmark.RIGHT_SHOULDER to 0.48f,
+            PoseLandmark.RIGHT_ELBOW to 0.41f,
+            PoseLandmark.RIGHT_WRIST to 0.39f
+        )
+
+        val measured = engine.measureElbowAngleDeg(pts, confidences = confidences)!!
+        assertTrue("Clear near-side 85deg arm must win over occluded far-side (<98 deg), got $measured", measured < 98f)
+    }
 }

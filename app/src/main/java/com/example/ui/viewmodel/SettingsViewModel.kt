@@ -3,6 +3,7 @@ package com.example.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.backup.MoveBackupManager
+import com.example.data.firebase.MoveCloudRepository
 import com.example.data.local.AppSettings
 import com.example.data.local.DetectionSensitivity
 import com.example.data.local.MoveRepository
@@ -19,7 +20,9 @@ import kotlinx.coroutines.launch
 
 class SettingsViewModel(
     private val settingsStore: SettingsStore,
-    private val repository: MoveRepository
+    private val repository: MoveRepository,
+    private val cloudRepository: MoveCloudRepository? = null,
+    private val currentUserId: String = ""
 ) : ViewModel() {
 
     val settings: StateFlow<AppSettings> = settingsStore.settingsFlow
@@ -109,6 +112,21 @@ class SettingsViewModel(
             repository.updateProfile(displayName, safeWeight)
             repository.updateDailyGoal(safeGoal)
             settingsStore.updateSettings { it.copy(userHeightCm = safeHeight) }
+            if (cloudRepository != null && currentUserId.isNotBlank()) {
+                val updated = repository.getUserProfileOnce()
+                cloudRepository.registerOrUpdateProfile(
+                    userId = currentUserId,
+                    displayName = updated.displayName,
+                    email = null,
+                    weightKg = safeWeight,
+                    heightCm = safeHeight,
+                    dailyGoalMinutes = safeGoal,
+                    currentStreak = updated.currentStreak,
+                    longestStreak = updated.longestStreak,
+                    lastActiveDate = updated.lastActiveDate,
+                    onboardingCompleted = true
+                )
+            }
             _statusMessage.value = "บันทึกข้อมูลร่างกายและการตั้งค่าแล้ว"
         }
     }
@@ -130,6 +148,26 @@ class SettingsViewModel(
             parsed.onSuccess { payload ->
                 repository.importWorkoutsFromBackup(payload.workouts, payload.profile)
                     .onSuccess { importedCount ->
+                        if (cloudRepository != null && currentUserId.isNotBlank()) {
+                            for (session in payload.workouts) {
+                                if (session.durationSeconds >= 5) {
+                                    cloudRepository.saveWorkout(currentUserId, session)
+                                }
+                            }
+                            val updatedProfile = repository.getUserProfileOnce()
+                            cloudRepository.registerOrUpdateProfile(
+                                userId = currentUserId,
+                                displayName = updatedProfile.displayName,
+                                email = null,
+                                weightKg = updatedProfile.weightKg,
+                                heightCm = null,
+                                dailyGoalMinutes = updatedProfile.dailyGoalMinutes,
+                                currentStreak = updatedProfile.currentStreak,
+                                longestStreak = updatedProfile.longestStreak,
+                                lastActiveDate = updatedProfile.lastActiveDate,
+                                onboardingCompleted = true
+                            )
+                        }
                         _statusMessage.value = "นำเข้าข้อมูลสำเร็จ ($importedCount รายการใหม่)"
                         onCompleted()
                     }

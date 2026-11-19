@@ -37,6 +37,9 @@ class LocationDistanceTracker(
     private var isStarted = false
     private var lastValidLocation: Location? = null
     private var pendingMetersBuffer: Float = 0f
+    private var smoothedSpeedKmh: Float = 0f
+    private var lastValidSpeedMps: Float = 0f
+    private var stationaryStreak: Int = 0
 
     fun hasLocationPermission(): Boolean {
         val fine = ContextCompat.checkSelfPermission(
@@ -71,14 +74,17 @@ class LocationDistanceTracker(
 
         lastValidLocation = null
         pendingMetersBuffer = 0f
+        smoothedSpeedKmh = 0f
+        lastValidSpeedMps = 0f
+        stationaryStreak = 0
 
         var registeredAny = false
         if (gpsEnabled) {
             runCatching {
                 locationManager.requestLocationUpdates(
                     LocationManager.GPS_PROVIDER,
-                    1200L,
-                    2f,
+                    1000L,
+                    1.5f,
                     this,
                     Looper.getMainLooper()
                 )
@@ -94,8 +100,8 @@ class LocationDistanceTracker(
                 runCatching {
                     locationManager.requestLocationUpdates(
                         LocationManager.FUSED_PROVIDER,
-                        1800L,
-                        2f,
+                        1400L,
+                        1.5f,
                         this,
                         Looper.getMainLooper()
                     )
@@ -112,8 +118,8 @@ class LocationDistanceTracker(
                 runCatching {
                     locationManager.requestLocationUpdates(
                         LocationManager.NETWORK_PROVIDER,
-                        2200L,
-                        3f,
+                        2000L,
+                        2.5f,
                         this,
                         Looper.getMainLooper()
                     )
@@ -153,7 +159,7 @@ class LocationDistanceTracker(
                     isGpsEnabled = true,
                     hasFix = lastValidLocation != null,
                     accuracyMeters = accuracy,
-                    currentSpeedKmh = 0f
+                    currentSpeedKmh = smoothedSpeedKmh
                 )
             )
             return
@@ -162,40 +168,49 @@ class LocationDistanceTracker(
         val prev = lastValidLocation
         if (prev == null) {
             lastValidLocation = location
-            val initialSpeed = if (location.hasSpeed() && location.speed > 0.45f) location.speed * 3.6f else 0f
-            onRoutePointRecorded(location.latitude, location.longitude, initialSpeed)
+            val initialMps = if (location.hasSpeed() && location.speed > 0.45f) location.speed else 0f
+            lastValidSpeedMps = initialMps
+            smoothedSpeedKmh = (initialMps * 3.6f * 10f).roundToInt() / 10f
+            onRoutePointRecorded(location.latitude, location.longitude, smoothedSpeedKmh)
             onGpsStateChanged(
                 GpsTrackingSnapshot(
                     hasLocationPermission = true,
                     isGpsEnabled = true,
                     hasFix = true,
                     accuracyMeters = accuracy,
-                    currentSpeedKmh = initialSpeed
+                    currentSpeedKmh = smoothedSpeedKmh
                 )
             )
             return
         }
 
         val deltaMeters = prev.distanceTo(location)
-        val dtSec = ((location.time - prev.time).coerceAtLeast(150L)) / 1000.0f
+        val dtSec = ((location.time - prev.time).coerceAtLeast(250L)) / 1000.0f
         val impliedSpeedMps = deltaMeters / dtSec
         val maxPlausibleSpeedMps = when (sport) {
             SportType.WALKING -> 3.6f   // ~13 km/h
             SportType.CYCLING -> 18.5f  // ~66 km/h
             else -> 9.5f                // ~34 km/h running / field sports
         }
-        val minDriftThreshold = max(2.4f, accuracy * 0.40f)
+        val maxAccelSpike = lastValidSpeedMps + 4.8f * dtSec + 3.5f
+        val minDriftThreshold = max(2.2f, accuracy * 0.36f)
 
         val isGenuineMovement = deltaMeters >= minDriftThreshold &&
-            impliedSpeedMps in 0.35f..maxPlausibleSpeedMps
-        val measuredSpeedMps = when {
+            impliedSpeedMps in 0.35f..minOf(maxPlausibleSpeedMps, maxAccelSpike)
+
+        val instantSpeedMps = when {
             !isGenuineMovement -> 0f
             location.hasSpeed() && location.speed in 0.35f..maxPlausibleSpeedMps -> location.speed
             else -> impliedSpeedMps
         }
-        val roundedSpeedKmh = (measuredSpeedMps * 3.6f * 10f).roundToInt() / 10f
 
         if (isGenuineMovement) {
+            stationaryStreak = 0
+            lastValidSpeedMps = instantSpeedMps
+            val instKmh = instantSpeedMps * 3.6f
+            smoothedSpeedKmh = if (smoothedSpeedKmh <= 0.1f) instKmh else (smoothedSpeedKmh * 0.58f + instKmh * 0.42f)
+            val roundedSpeedKmh = (smoothedSpeedKmh * 10f).roundToInt() / 10f
+
             lastValidLocation = location
             onRoutePointRecorded(location.latitude, location.longitude, roundedSpeedKmh)
             pendingMetersBuffer += deltaMeters
@@ -204,15 +219,24 @@ class LocationDistanceTracker(
                 pendingMetersBuffer -= wholeMeters
                 onDistanceAddedMeters(wholeMeters)
             }
+        } else {
+            stationaryStreak++
+            if (stationaryStreak >= 2) {
+                smoothedSpeedKmh = 0f
+                lastValidSpeedMps = 0f
+            } else {
+                smoothedSpeedKmh *= 0.5f
+            }
         }
 
+        val displaySpeedKmh = (smoothedSpeedKmh * 10f).roundToInt() / 10f
         onGpsStateChanged(
             GpsTrackingSnapshot(
                 hasLocationPermission = true,
                 isGpsEnabled = true,
                 hasFix = true,
                 accuracyMeters = accuracy,
-                currentSpeedKmh = roundedSpeedKmh
+                currentSpeedKmh = displaySpeedKmh
             )
         )
     }

@@ -25,22 +25,22 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.LocalFireDepartment
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.MilitaryTech
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.SportsHandball
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -61,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -69,17 +70,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.model.ActiveWorkoutDraft
 import com.example.data.model.SportType
-import com.example.domain.AchievementBadge
-import com.example.domain.AdaptiveDailyPlan
-import com.example.domain.AthleteProgression
 import com.example.domain.DateStreakUtils
 import com.example.ui.components.DailyGoalRing
 import com.example.ui.components.GoalSettingDialog
 import com.example.ui.components.MetricTile
-import com.example.ui.components.MuscleRecoveryHeatmapCard
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
@@ -92,6 +90,8 @@ import com.example.widget.MoveWidgetProvider
 @Composable
 fun DashboardScreen(
     data: DashboardData,
+    userEmail: String? = null,
+    userPhotoUrl: String? = null,
     onStartExerciseClick: () -> Unit,
     onQuickStartSport: (SportType) -> Unit,
     onUpdateDailyGoal: (Int) -> Unit,
@@ -99,7 +99,8 @@ fun DashboardScreen(
     onResumeDraft: (ActiveWorkoutDraft) -> Unit,
     onDiscardDraft: () -> Unit,
     onViewHistory: () -> Unit,
-    onStartAdaptivePlan: (AdaptiveDailyPlan) -> Unit = {},
+    onOpenRecoveryPlanPage: () -> Unit = {},
+    onOpenProgressionBadgesPage: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -123,7 +124,7 @@ fun DashboardScreen(
         var weightInput by remember(data.profile.weightKg) { mutableStateOf(data.profile.weightKg.toInt().toString()) }
         AlertDialog(
             onDismissRequest = { showProfileDialog = false },
-            title = { Text("โปรไฟล์ผู้ใช้") },
+            title = { Text("โปรไฟล์นักกีฬา") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(
@@ -141,7 +142,11 @@ fun DashboardScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text(
-                        text = "ข้อมูลการออกกำลังกาย เป้าหมาย และ Streak ถูกบันทึกไว้ในฐานข้อมูลบนอุปกรณ์อย่างถาวร",
+                        text = if (!userEmail.isNullOrBlank()) {
+                            "บัญชีที่เชื่อมต่อ: $userEmail (ซิงก์คลาวด์อัตโนมัติ)"
+                        } else {
+                            "ข้อมูลการออกกำลังกาย เป้าหมาย และ Streak ซิงก์กับบัญชีของคุณอย่างปลอดภัย"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -174,7 +179,7 @@ fun DashboardScreen(
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Atmospheric Athletic Hero Greeting Header
+            // 1. Clean Hero Header with Account Avatar & Cloud Badge
             item {
                 Card(
                     shape = RoundedCornerShape(28.dp),
@@ -199,46 +204,83 @@ fun DashboardScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "MOVE • Smart Fitness",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MintBright,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "MOVE",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MintBright,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Surface(
+                                            shape = RoundedCornerShape(999.dp),
+                                            color = Color.White.copy(alpha = 0.14f)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.CloudDone,
+                                                    contentDescription = null,
+                                                    tint = MintBright,
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                                Text(
+                                                    text = "ซิงก์คลาวด์",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color.White
+                                                )
+                                            }
+                                        }
+                                    }
                                     Text(
                                         text = "สวัสดี, ${data.profile.displayName}",
                                         style = MaterialTheme.typography.headlineMedium,
                                         color = Color.White,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = "พร้อมเคลื่อนไหวเพื่อสุขภาพที่ดีขึ้นวันนี้หรือยัง?",
+                                        text = "Level ${data.progression.level} • ${data.progression.rankTitleThai}",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color.White.copy(alpha = 0.8f)
+                                        color = MintBright
                                     )
                                 }
 
                                 Surface(
                                     shape = CircleShape,
                                     color = Color.White.copy(alpha = 0.14f),
-                                    border = BorderStroke(1.dp, MintBright.copy(alpha = 0.35f)),
+                                    border = BorderStroke(1.5.dp, MintBright.copy(alpha = 0.45f)),
                                     modifier = Modifier
-                                        .size(48.dp)
+                                        .size(50.dp)
                                         .clip(CircleShape)
                                         .clickable { showProfileDialog = true }
                                         .testTag("edit_profile_button")
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Person,
-                                            contentDescription = "แก้ไขโปรไฟล์",
-                                            tint = MintBright
-                                        )
+                                        if (!userPhotoUrl.isNullOrBlank()) {
+                                            AsyncImage(
+                                                model = userPhotoUrl,
+                                                contentDescription = "รูปโปรไฟล์ผู้ใช้",
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Person,
+                                                contentDescription = "แก้ไขโปรไฟล์",
+                                                tint = MintBright
+                                            )
+                                        }
                                     }
                                 }
                             }
 
-                            // Integrated Streak + Readiness Summary Pill Row inside Hero
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -293,7 +335,10 @@ fun DashboardScreen(
                                 Surface(
                                     shape = RoundedCornerShape(16.dp),
                                     color = Color.White.copy(alpha = 0.12f),
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .clickable(onClick = onOpenRecoveryPlanPage)
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -327,7 +372,7 @@ fun DashboardScreen(
                 }
             }
 
-            // Unfinished workout recovery banner if user exited mid-session
+            // 2. Unfinished workout recovery banner if paused
             if (data.pendingDraft != null) {
                 item {
                     PendingWorkoutDraftCard(
@@ -338,12 +383,13 @@ fun DashboardScreen(
                 }
             }
 
-            // Adaptive Main Section: Side-by-side on Tablet, stacked on Phone
+            // 3. Goal Ring + Primary CTA
             if (isWide) {
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         DailyGoalCard(
                             data = data,
@@ -352,17 +398,10 @@ fun DashboardScreen(
                         )
                         Column(
                             modifier = Modifier.weight(0.9f),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
                             StartExerciseHeroCard(onStartExerciseClick = onStartExerciseClick)
-                            AdaptiveDailyPlanCard(
-                                plan = data.adaptivePlan,
-                                onStartPlan = { onStartAdaptivePlan(data.adaptivePlan) }
-                            )
-                            MuscleRecoveryHeatmapCard(
-                                report = data.muscleRecovery,
-                                onStartRecommendedSport = onQuickStartSport
-                            )
+                            TodayStatsRow(data = data)
                         }
                     }
                 }
@@ -376,21 +415,8 @@ fun DashboardScreen(
                 item {
                     StartExerciseHeroCard(onStartExerciseClick = onStartExerciseClick)
                 }
-                item {
-                    AdaptiveDailyPlanCard(
-                        plan = data.adaptivePlan,
-                        onStartPlan = { onStartAdaptivePlan(data.adaptivePlan) }
-                    )
-                }
-                item {
-                    MuscleRecoveryHeatmapCard(
-                        report = data.muscleRecovery,
-                        onStartRecommendedSport = onQuickStartSport
-                    )
-                }
             }
 
-            // Goal reached congratulations banner (shown when a timed daily goal is active & completed)
             item {
                 AnimatedVisibility(visible = !data.dailyGoal.isFreeMode && data.dailyGoal.isGoalReached) {
                     GoalReachedBanner(
@@ -400,93 +426,122 @@ fun DashboardScreen(
                 }
             }
 
-            // Athlete Level, XP & Achievement Badges Showcase
-            item {
-                AthleteProgressionSection(progression = data.progression)
+            if (!isWide) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "สรุปกิจกรรมวันนี้",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            fontWeight = FontWeight.Bold
+                        )
+                        TodayStatsRow(data = data)
+                    }
+                }
             }
 
-            // Today's live stats row
+            // 4. Dedicated Topic Hub (Clean separation: 1 page per topic)
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "สรุปกิจกรรมวันนี้",
-                        style = MaterialTheme.typography.titleLarge,
+                        text = "หัวข้อเฉพาะทาง",
+                        style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground,
                         fontWeight = FontWeight.Bold
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        MetricTile(
-                            icon = Icons.Rounded.LocalFireDepartment,
-                            label = "แคลอรีวันนี้",
-                            value = "${data.dailyGoal.caloriesToday} kcal",
-                            accentColor = AmberWarm,
-                            modifier = Modifier.weight(1f)
-                        )
-                        MetricTile(
-                            icon = Icons.AutoMirrored.Rounded.DirectionsWalk,
-                            label = "ก้าววันนี้",
-                            value = "${data.dailyGoal.stepsToday}",
+                        TopicNavigationCard(
+                            icon = Icons.Rounded.FitnessCenter,
+                            title = "แผนฝึก & กล้ามเนื้อ",
+                            subtitle = "ความพร้อม ${data.muscleRecovery.overallReadinessPercent}% • ${data.adaptivePlan.badgeTag}",
                             accentColor = EmeraldVibrant,
-                            modifier = Modifier.weight(1f)
+                            onClick = onOpenRecoveryPlanPage,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("topic_recovery_plan_card")
                         )
-                        MetricTile(
-                            icon = Icons.Rounded.Route,
-                            label = "ระยะทาง",
-                            value = DateStreakUtils.formatDistanceKm(data.dailyGoal.distanceMetersToday),
+                        TopicNavigationCard(
+                            icon = Icons.Rounded.EmojiEvents,
+                            title = "เลเวล & เหรียญ",
+                            subtitle = "Lv.${data.progression.level} • ${data.progression.unlockedCount}/${data.progression.badges.size} เหรียญ",
+                            accentColor = AmberWarm,
+                            onClick = onOpenProgressionBadgesPage,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("topic_badges_card")
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        TopicNavigationCard(
+                            icon = Icons.Rounded.SportsHandball,
+                            title = "กีฬา & ยืดเหยียด",
+                            subtitle = "8 ชนิดกีฬา • กล้อง AI / GPS",
                             accentColor = ForestGreen,
-                            modifier = Modifier.weight(1f)
+                            onClick = onStartExerciseClick,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("topic_sports_card")
+                        )
+                        TopicNavigationCard(
+                            icon = Icons.Rounded.BarChart,
+                            title = "สถิติ & ประวัติ",
+                            subtitle = "บันทึกแล้ว ${data.workouts.size} กิจกรรม",
+                            accentColor = ForestGreenMedium,
+                            onClick = onViewHistory,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("topic_history_card")
                         )
                     }
                 }
             }
 
-            // Quick Sport Shortcuts + Recent History Preview
+            // 5. Compact Quick-Start Sport Row
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Text(
+                        text = "เริ่มต้นด่วน",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontWeight = FontWeight.Bold
+                    )
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(
-                            text = "เริ่มต้นด่วน",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            fontWeight = FontWeight.Bold
-                        )
-                        TextButton(onClick = onViewHistory) {
-                            Text("ดูประวัติทั้งหมด")
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        listOf(SportType.RUNNING, SportType.WALKING, SportType.JUMP_ROPE).forEach { sport ->
+                        items(
+                            listOf(
+                                SportType.GENERAL,
+                                SportType.RUNNING,
+                                SportType.WALKING,
+                                SportType.JUMP_ROPE,
+                                SportType.CYCLING
+                            ),
+                            key = { it.name }
+                        ) { sport ->
                             Card(
-                                shape = RoundedCornerShape(20.dp),
+                                shape = RoundedCornerShape(18.dp),
                                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
                                 modifier = Modifier
-                                    .weight(1f)
+                                    .width(126.dp)
                                     .clickable { onQuickStartSport(sport) }
                                     .testTag("quick_sport_${sport.name}")
                             ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 16.dp, horizontal = 10.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(46.dp)
+                                            .size(36.dp)
                                             .clip(CircleShape)
                                             .background(
                                                 Brush.linearGradient(
@@ -498,26 +553,124 @@ fun DashboardScreen(
                                         Icon(
                                             imageVector = sport.icon,
                                             contentDescription = sport.thaiName,
-                                            tint = Color.White
+                                            tint = Color.White,
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
-                                    Text(
-                                        text = sport.thaiName,
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "~${sport.kcalPerMinute.toInt()} kcal/น.",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
+                                    Column {
+                                        Text(
+                                            text = sport.thaiName,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${sport.kcalPerMinute.toInt()} kcal/น.",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TodayStatsRow(data: DashboardData) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        MetricTile(
+            icon = Icons.Rounded.LocalFireDepartment,
+            label = "แคลอรีวันนี้",
+            value = "${data.dailyGoal.caloriesToday} kcal",
+            accentColor = AmberWarm,
+            modifier = Modifier.weight(1f)
+        )
+        MetricTile(
+            icon = Icons.AutoMirrored.Rounded.DirectionsWalk,
+            label = "ก้าววันนี้",
+            value = "${data.dailyGoal.stepsToday}",
+            accentColor = EmeraldVibrant,
+            modifier = Modifier.weight(1f)
+        )
+        MetricTile(
+            icon = Icons.Rounded.Route,
+            label = "ระยะทาง",
+            value = DateStreakUtils.formatDistanceKm(data.dailyGoal.distanceMetersToday),
+            accentColor = ForestGreen,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun TopicNavigationCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    accentColor: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+        modifier = modifier.clickable(onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(accentColor.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -537,17 +690,17 @@ private fun DailyGoalCard(
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "เป้าหมายการออกกำลังกายวันนี้",
+                        text = "เป้าหมายวันนี้",
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Bold
@@ -558,7 +711,7 @@ private fun DailyGoalCard(
                         } else {
                             "เป้าหมาย ${goal.goalMinutes} นาที"
                         },
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -592,12 +745,12 @@ private fun DailyGoalCard(
                     progressPercent = goal.progressPercent,
                     completedMinutes = goal.completedMinutesToday,
                     goalMinutes = goal.goalMinutes,
-                    ringSize = 152.dp
+                    ringSize = 140.dp
                 )
 
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     GoalStatRow(
                         label = "เวลาสะสมวันนี้",
@@ -628,7 +781,7 @@ private fun GoalStatRow(label: String, value: String) {
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
@@ -636,7 +789,7 @@ private fun GoalStatRow(label: String, value: String) {
             )
             Text(
                 text = value,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold
             )
@@ -651,7 +804,7 @@ private fun StartExerciseHeroCard(onStartExerciseClick: () -> Unit) {
         shadowElevation = 4.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .height(68.dp)
+            .height(64.dp)
             .clip(RoundedCornerShape(24.dp))
             .clickable(onClick = onStartExerciseClick)
             .testTag("start_workout_cta")
@@ -672,7 +825,7 @@ private fun StartExerciseHeroCard(onStartExerciseClick: () -> Unit) {
             ) {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(36.dp)
                         .clip(CircleShape)
                         .background(Color.White.copy(alpha = 0.2f)),
                     contentAlignment = Alignment.Center
@@ -681,7 +834,7 @@ private fun StartExerciseHeroCard(onStartExerciseClick: () -> Unit) {
                         imageVector = Icons.Rounded.PlayArrow,
                         contentDescription = null,
                         tint = Color.White,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(22.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
@@ -704,28 +857,28 @@ private fun GoalReachedBanner(goalMinutes: Int, completedMinutes: Int) {
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Image(
                 painter = painterResource(id = R.drawable.img_goal_badge),
                 contentDescription = stringResource(R.string.goal_badge_desc),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .size(56.dp)
+                    .size(50.dp)
                     .clip(RoundedCornerShape(14.dp))
             )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "ยินดีด้วย! คุณทำเป้าหมายรายวันสำเร็จแล้ว",
-                    style = MaterialTheme.typography.titleMedium,
+                    text = "ยินดีด้วย! เป้าหมายรายวันสำเร็จแล้ว",
+                    style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "วันนี้คุณออกกำลังกายไปแล้ว $completedMinutes นาที (เป้าหมาย $goalMinutes นาที)",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = "ออกกำลังกายแล้ว $completedMinutes นาที (เป้า $goalMinutes นาที)",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                 )
             }
@@ -787,281 +940,6 @@ private fun PendingWorkoutDraftCard(
                     Text("ทำกิจกรรมต่อ")
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun AdaptiveDailyPlanCard(
-    plan: AdaptiveDailyPlan,
-    onStartPlan: () -> Unit
-) {
-    Card(
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, EmeraldVibrant.copy(alpha = 0.45f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("adaptive_plan_card")
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AutoAwesome,
-                        contentDescription = null,
-                        tint = EmeraldVibrant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "แผนฝึกแนะนำอัตโนมัติวันนี้",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = EmeraldVibrant.copy(alpha = 0.14f)
-                ) {
-                    Text(
-                        text = plan.badgeTag,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ForestGreen,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
-                }
-            }
-
-            Text(
-                text = plan.titleThai,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = plan.subtitleThai,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Button(
-                onClick = onStartPlan,
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ForestGreen),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("start_adaptive_plan_button")
-            ) {
-                Icon(Icons.Rounded.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = if (plan.isHiitRecommended) {
-                        "เริ่มตามแผน HIIT (${plan.suggestedWorkSec}/${plan.suggestedRestSec}วิ x ${plan.suggestedRounds})"
-                    } else {
-                        "เริ่มตามแผน (${plan.suggestedSport.thaiName})"
-                    },
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun AthleteProgressionSection(progression: AthleteProgression) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("athlete_progression_card")
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(ForestGreenDeep, ForestGreen)
-                        )
-                    )
-                    .padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(CircleShape)
-                                .background(MintBright.copy(alpha = 0.2f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.EmojiEvents,
-                                contentDescription = null,
-                                tint = AmberWarm,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Column {
-                            Text(
-                                text = "Level ${progression.level} • ${progression.rankTitleThai}",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "ปลดล็อกแล้ว ${progression.unlockedCount}/${progression.badges.size} เหรียญเกียรติยศ",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MintBright
-                            )
-                        }
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color.White.copy(alpha = 0.14f)
-                    ) {
-                        Text(
-                            text = "${progression.totalXp} XP",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = AmberWarm,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
-                    }
-                }
-
-                LinearProgressIndicator(
-                    progress = { progression.levelProgressFraction },
-                    color = MintBright,
-                    trackColor = Color.White.copy(alpha = 0.18f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(999.dp))
-                )
-
-                Text(
-                    text = "อีก ${progression.xpNeededForNextLevel - progression.xpIntoLevel} XP เพื่อเลื่อนเป็น Level ${progression.level + 1}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.78f)
-                )
-            }
-        }
-
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            items(progression.badges, key = { it.id }) { badge ->
-                AchievementBadgeCard(badge = badge)
-            }
-        }
-    }
-}
-
-@Composable
-private fun AchievementBadgeCard(badge: AchievementBadge) {
-    val accent = if (badge.unlocked) EmeraldVibrant else MaterialTheme.colorScheme.outline
-    Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (badge.unlocked) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-            } else {
-                MaterialTheme.colorScheme.surface
-            }
-        ),
-        border = BorderStroke(
-            1.dp,
-            if (badge.unlocked) EmeraldVibrant.copy(alpha = 0.65f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-        ),
-        modifier = Modifier
-            .width(156.dp)
-            .testTag("badge_card_${badge.id}")
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = when (badge.iconKey) {
-                        "STREAK", "STREAK7" -> Icons.Rounded.LocalFireDepartment
-                        "BURN" -> Icons.Rounded.Bolt
-                        "DISTANCE" -> Icons.Rounded.Route
-                        "REPS" -> Icons.Rounded.Repeat
-                        else -> Icons.Rounded.MilitaryTech
-                    },
-                    contentDescription = null,
-                    tint = if (badge.unlocked) AmberWarm else accent,
-                    modifier = Modifier.size(22.dp)
-                )
-                Icon(
-                    imageVector = if (badge.unlocked) Icons.Rounded.CheckCircle else Icons.Rounded.Lock,
-                    contentDescription = null,
-                    tint = if (badge.unlocked) EmeraldVibrant else accent.copy(alpha = 0.65f),
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-
-            Text(
-                text = badge.titleThai,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = badge.descriptionThai,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                minLines = 2,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            LinearProgressIndicator(
-                progress = { badge.progressFraction },
-                color = if (badge.unlocked) EmeraldVibrant else MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(5.dp)
-                    .clip(RoundedCornerShape(999.dp))
-            )
-            Text(
-                text = if (badge.unlocked) "ปลดล็อกแล้ว!" else badge.progressLabel,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (badge.unlocked) EmeraldVibrant else MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-            )
         }
     }
 }

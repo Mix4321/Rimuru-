@@ -1,5 +1,6 @@
 package com.example
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
 import androidx.compose.material.icons.outlined.Dashboard
@@ -36,18 +38,26 @@ import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.credentials.ClearCredentialStateRequest
+import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -61,7 +71,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import com.example.data.firebase.MoveCloudRepository
 import com.example.data.firebase.WorkoutDraftStore
+import com.example.data.local.AppSettings
 import com.example.data.local.MoveRepository
 import com.example.data.local.MoveRoomDatabase
 import com.example.data.local.SettingsStore
@@ -69,13 +81,22 @@ import com.example.data.local.ThemeMode
 import com.example.data.model.SportType
 import com.example.data.model.TrackingMode
 import com.example.data.model.UiState
+import com.example.ui.screens.AccountRegistrationScreen
+import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.HistoryScreen
+import com.example.ui.screens.ProgressionBadgesScreen
+import com.example.ui.screens.RecoveryAndPlanScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.SportSelectionScreen
 import com.example.ui.screens.StretchingScreen
 import com.example.ui.screens.WorkoutScreen
+import com.example.ui.theme.ForestGreen
+import com.example.ui.theme.ForestGreenDeep
+import com.example.ui.theme.ForestGreenMedium
 import com.example.ui.theme.MoveTheme
+import com.example.ui.viewmodel.AuthGateState
+import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.DashboardData
 import com.example.ui.viewmodel.DashboardViewModel
 import com.example.ui.viewmodel.SettingsViewModel
@@ -94,6 +115,12 @@ data object HistoryRoute
 
 @Serializable
 data object SettingsRoute
+
+@Serializable
+data object RecoveryPlanRoute
+
+@Serializable
+data object ProgressionBadgesRoute
 
 @Serializable
 data class StretchingRoute(
@@ -152,27 +179,163 @@ private enum class TopLevelTab(
 
 @Composable
 fun AppNavigation() {
+    val context = LocalContext.current
+    val credentialManager = remember(context) { CredentialManager.create(context) }
+    val settingsStore = remember(context) { SettingsStore(context.applicationContext) }
+    val rootSettings by settingsStore.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
+
+    val isDarkTheme = when (rootSettings.themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
+
+    val authViewModel: AuthViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer {
+                val app = checkNotNull(this[APPLICATION_KEY])
+                val dao = MoveRoomDatabase.getInstance(app).moveDao()
+                AuthViewModel(
+                    cloudRepository = MoveCloudRepository(app),
+                    localRepository = MoveRepository(dao),
+                    settingsStore = SettingsStore(app)
+                )
+            }
+        }
+    )
+
+    val gateState by authViewModel.gateState.collectAsStateWithLifecycle()
+    val isAuthBusy by authViewModel.isBusy.collectAsStateWithLifecycle()
+    val authErrorMessage by authViewModel.errorMessage.collectAsStateWithLifecycle()
+
+    val performSignOut: () -> Unit = {
+        authViewModel.signOut {
+            credentialManager.clearCredentialState(ClearCredentialStateRequest())
+        }
+    }
+
+    MoveTheme(darkTheme = isDarkTheme) {
+        when (val state = gateState) {
+            is AuthGateState.CheckingSession -> {
+                AuthCheckingSplash()
+            }
+
+            is AuthGateState.SignedOut -> {
+                AuthScreen(
+                    selectedTab = state.modeTab,
+                    isBusy = isAuthBusy,
+                    errorMessage = authErrorMessage,
+                    onSelectTab = authViewModel::selectModeTab,
+                    onGoogleIdTokenReceived = authViewModel::signInWithGoogleIdToken,
+                    onAuthError = authViewModel::setErrorMessage
+                )
+            }
+
+            is AuthGateState.NeedsOnboarding -> {
+                AccountRegistrationScreen(
+                    defaultName = state.defaultName,
+                    email = state.email,
+                    isBusy = isAuthBusy,
+                    errorMessage = authErrorMessage,
+                    onCompleteRegistration = authViewModel::completeRegistration,
+                    onSignOut = performSignOut
+                )
+            }
+
+            is AuthGateState.Authenticated -> {
+                key(state.uid) {
+                    AuthenticatedMoveShell(
+                        authUser = state,
+                        onSignOut = performSignOut
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuthCheckingSplash() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(ForestGreenDeep, ForestGreenMedium, ForestGreen)
+                )
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = Color.White.copy(alpha = 0.16f),
+                modifier = Modifier.size(76.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.DirectionsRun,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+            }
+            Text(
+                text = "MOVE",
+                style = MaterialTheme.typography.headlineLarge,
+                color = Color.White,
+                fontWeight = FontWeight.ExtraBold
+            )
+            CircularProgressIndicator(
+                color = Color.White,
+                strokeWidth = 3.dp,
+                modifier = Modifier.size(28.dp)
+            )
+            Text(
+                text = "กำลังเชื่อมต่อบัญชีนักกีฬาของคุณ...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.85f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AuthenticatedMoveShell(
+    authUser: AuthGateState.Authenticated,
+    onSignOut: () -> Unit
+) {
     val dashboardViewModel: DashboardViewModel = viewModel(
+        key = "dashboard_${authUser.uid}",
         factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[APPLICATION_KEY])
                 val dao = MoveRoomDatabase.getInstance(app).moveDao()
                 DashboardViewModel(
                     repository = MoveRepository(dao),
-                    draftStore = WorkoutDraftStore(app)
+                    draftStore = WorkoutDraftStore(app),
+                    cloudRepository = MoveCloudRepository(app),
+                    currentUserId = authUser.uid
                 )
             }
         }
     )
 
     val settingsViewModel: SettingsViewModel = viewModel(
+        key = "settings_${authUser.uid}",
         factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[APPLICATION_KEY])
                 val dao = MoveRoomDatabase.getInstance(app).moveDao()
                 SettingsViewModel(
                     settingsStore = SettingsStore(app),
-                    repository = MoveRepository(dao)
+                    repository = MoveRepository(dao),
+                    cloudRepository = MoveCloudRepository(app),
+                    currentUserId = authUser.uid
                 )
             }
         }
@@ -180,12 +343,6 @@ fun AppNavigation() {
 
     val appSettings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val settingsMessage by settingsViewModel.statusMessage.collectAsStateWithLifecycle()
-
-    val isDarkTheme = when (appSettings.themeMode) {
-        ThemeMode.SYSTEM -> isSystemInDarkTheme()
-        ThemeMode.LIGHT -> false
-        ThemeMode.DARK -> true
-    }
 
     val dashboardState by dashboardViewModel.uiState.collectAsStateWithLifecycle()
     val actionMessage by dashboardViewModel.actionMessage.collectAsStateWithLifecycle()
@@ -210,8 +367,10 @@ fun AppNavigation() {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDest = navBackStackEntry?.destination
-    val isWorkoutScreen = currentDest?.hasRoute<WorkoutRoute>() == true ||
-        currentDest?.hasRoute<StretchingRoute>() == true
+    val hideBottomNavigation = currentDest?.hasRoute<WorkoutRoute>() == true ||
+        currentDest?.hasRoute<StretchingRoute>() == true ||
+        currentDest?.hasRoute<RecoveryPlanRoute>() == true ||
+        currentDest?.hasRoute<ProgressionBadgesRoute>() == true
 
     fun navigateTopLevel(tab: TopLevelTab) {
         navController.navigate(tab.routeObj) {
@@ -223,28 +382,27 @@ fun AppNavigation() {
         }
     }
 
-    MoveTheme(darkTheme = isDarkTheme) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val useRail = maxWidth >= 640.dp
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val useRail = maxWidth >= 640.dp
 
-            Scaffold(
-                contentWindowInsets = WindowInsets.safeDrawing,
-                snackbarHost = { SnackbarHost(snackbarHostState) },
-                bottomBar = {
-                    if (!useRail && !isWorkoutScreen) {
-                        NavigationBar(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            tonalElevation = 3.dp
-                        ) {
-                            TopLevelTab.entries.forEach { tab ->
-                                val selected = currentDest?.hierarchy?.any {
-                                    when (tab) {
-                                        TopLevelTab.DASHBOARD -> it.hasRoute<DashboardRoute>()
-                                        TopLevelTab.SPORTS -> it.hasRoute<SportsRoute>()
-                                        TopLevelTab.HISTORY -> it.hasRoute<HistoryRoute>()
-                                        TopLevelTab.SETTINGS -> it.hasRoute<SettingsRoute>()
-                                    }
-                                } == true
+        Scaffold(
+            contentWindowInsets = WindowInsets.safeDrawing,
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            bottomBar = {
+                if (!useRail && !hideBottomNavigation) {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 3.dp
+                    ) {
+                        TopLevelTab.entries.forEach { tab ->
+                            val selected = currentDest?.hierarchy?.any {
+                                when (tab) {
+                                    TopLevelTab.DASHBOARD -> it.hasRoute<DashboardRoute>()
+                                    TopLevelTab.SPORTS -> it.hasRoute<SportsRoute>()
+                                    TopLevelTab.HISTORY -> it.hasRoute<HistoryRoute>()
+                                    TopLevelTab.SETTINGS -> it.hasRoute<SettingsRoute>()
+                                }
+                            } == true
                             NavigationBarItem(
                                 selected = selected,
                                 onClick = { navigateTopLevel(tab) },
@@ -272,7 +430,7 @@ fun AppNavigation() {
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                if (useRail && !isWorkoutScreen) {
+                if (useRail && !hideBottomNavigation) {
                     NavigationRail(
                         containerColor = MaterialTheme.colorScheme.surface,
                         modifier = Modifier.fillMaxHeight()
@@ -338,6 +496,8 @@ fun AppNavigation() {
                             DashboardStateContent(state = dashboardState) { data ->
                                 DashboardScreen(
                                     data = data,
+                                    userEmail = authUser.email,
+                                    userPhotoUrl = authUser.photoUrl,
                                     onStartExerciseClick = { navigateTopLevel(TopLevelTab.SPORTS) },
                                     onQuickStartSport = { sport ->
                                         navController.navigate(
@@ -360,6 +520,21 @@ fun AppNavigation() {
                                     },
                                     onDiscardDraft = dashboardViewModel::discardPendingDraft,
                                     onViewHistory = { navigateTopLevel(TopLevelTab.HISTORY) },
+                                    onOpenRecoveryPlanPage = {
+                                        navController.navigate(RecoveryPlanRoute)
+                                    },
+                                    onOpenProgressionBadgesPage = {
+                                        navController.navigate(ProgressionBadgesRoute)
+                                    }
+                                )
+                            }
+                        }
+
+                        composable<RecoveryPlanRoute> {
+                            DashboardStateContent(state = dashboardState) { data ->
+                                RecoveryAndPlanScreen(
+                                    data = data,
+                                    onBack = { navController.popBackStack() },
                                     onStartAdaptivePlan = { plan ->
                                         navController.navigate(
                                             WorkoutRoute(
@@ -372,7 +547,24 @@ fun AppNavigation() {
                                                 hiitRounds = plan.suggestedRounds.coerceAtLeast(1)
                                             )
                                         )
+                                    },
+                                    onQuickStartSport = { sport ->
+                                        navController.navigate(
+                                            StretchingRoute(
+                                                sportName = sport.name,
+                                                trackingModeName = sport.defaultTrackingMode.name
+                                            )
+                                        )
                                     }
+                                )
+                            }
+                        }
+
+                        composable<ProgressionBadgesRoute> {
+                            DashboardStateContent(state = dashboardState) { data ->
+                                ProgressionBadgesScreen(
+                                    progression = data.progression,
+                                    onBack = { navController.popBackStack() }
                                 )
                             }
                         }
@@ -435,21 +627,28 @@ fun AppNavigation() {
                         }
 
                         composable<SettingsRoute> {
-                            SettingsScreen(viewModel = settingsViewModel)
+                            SettingsScreen(
+                                viewModel = settingsViewModel,
+                                userEmail = authUser.email,
+                                userPhotoUrl = authUser.photoUrl,
+                                onSignOutClick = onSignOut
+                            )
                         }
 
                         composable<WorkoutRoute> { backStackEntry ->
                             val routeArgs = backStackEntry.toRoute<WorkoutRoute>()
                             val sport = SportType.fromNameSafe(routeArgs.sportName)
                             val workoutViewModel: WorkoutViewModel = viewModel(
-                                key = "workout_${backStackEntry.id}",
+                                key = "workout_${authUser.uid}_${backStackEntry.id}",
                                 factory = viewModelFactory {
                                     initializer {
                                         val app = checkNotNull(this[APPLICATION_KEY])
                                         val dao = MoveRoomDatabase.getInstance(app).moveDao()
                                         WorkoutViewModel(
                                             repository = MoveRepository(dao),
-                                            draftStore = WorkoutDraftStore(app)
+                                            draftStore = WorkoutDraftStore(app),
+                                            cloudRepository = MoveCloudRepository(app),
+                                            currentUserId = authUser.uid
                                         )
                                     }
                                 }
@@ -499,7 +698,6 @@ fun AppNavigation() {
                 }
             }
         }
-    }
     }
 }
 

@@ -26,9 +26,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Balance
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.ListAlt
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Route
@@ -92,6 +94,7 @@ fun HistoryScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    var historyTopicTab by remember { mutableIntStateOf(0) } // 0 = รายการกิจกรรม, 1 = กราฟสถิติ
     var selectedChartTab by remember { mutableIntStateOf(0) } // 0 = รายวัน, 1 = รายสัปดาห์
     var selectedSportFilter by remember { mutableStateOf<SportType?>(null) }
     var inspectedSession by remember { mutableStateOf<WorkoutSession?>(null) }
@@ -173,7 +176,7 @@ fun HistoryScreen(
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Text(
-                                    text = "Lv.${data.progression.level} • ${data.progression.unlockedCount}/${data.progression.badges.size}",
+                                    text = "Lv.${data.progression.level}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MintBright,
                                     fontWeight = FontWeight.Bold
@@ -191,7 +194,7 @@ fun HistoryScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Column(modifier = Modifier.padding(10.dp)) {
-                                Text("กิจกรรมทั้งหมด", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.72f))
+                                Text("ทั้งหมด", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.72f))
                                 Text("${data.workouts.size} ครั้ง", style = MaterialTheme.typography.titleMedium, color = MintBright, fontWeight = FontWeight.Bold)
                             }
                         }
@@ -211,7 +214,7 @@ fun HistoryScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Column(modifier = Modifier.padding(10.dp)) {
-                                Text("เผาผลาญรวม", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.72f))
+                                Text("เผาผลาญ", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.72f))
                                 Text("${data.workouts.sumOf { it.caloriesBurned }} kcal", style = MaterialTheme.typography.titleMedium, color = AmberWarm, fontWeight = FontWeight.Bold)
                             }
                         }
@@ -220,121 +223,180 @@ fun HistoryScreen(
             }
         }
 
-        // Daily / Weekly Chart Card
+        // Dedicated Topic Switcher: Logs vs Charts
         item {
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier.fillMaxWidth()
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("history_topic_switcher")
             ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                SegmentedButton(
+                    selected = historyTopicTab == 0,
+                    onClick = { historyTopicTab = 0 },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    icon = { Icon(Icons.Rounded.ListAlt, contentDescription = null, modifier = Modifier.size(18.dp)) }
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (selectedChartTab == 0) "สถิติรายวัน (นาที)" else "สถิติรายสัปดาห์ (นาที)",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        SingleChoiceSegmentedButtonRow {
-                            listOf("รายวัน", "รายสัปดาห์").forEachIndexed { index, label ->
-                                SegmentedButton(
-                                    selected = selectedChartTab == index,
-                                    onClick = { selectedChartTab = index },
-                                    shape = SegmentedButtonDefaults.itemShape(index = index, count = 2)
-                                ) {
-                                    Text(label, style = MaterialTheme.typography.labelMedium)
-                                }
-                            }
-                        }
-                    }
-
-                    ActivityBarChart(
-                        bars = if (selectedChartTab == 0) data.last7DaysBars else data.last4WeeksBars
-                    )
+                    Text("รายการกิจกรรม (${data.workouts.size})")
+                }
+                SegmentedButton(
+                    selected = historyTopicTab == 1,
+                    onClick = { historyTopicTab = 1 },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    icon = { Icon(Icons.Rounded.BarChart, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                ) {
+                    Text("กราฟสถิติ")
                 }
             }
         }
 
-        // Sport filter chips
-        item {
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                item {
-                    FilterChip(
-                        selected = selectedSportFilter == null,
-                        onClick = { selectedSportFilter = null },
-                        label = { Text("ทั้งหมด") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                        )
-                    )
-                }
-                items(SportType.entries) { sport ->
-                    FilterChip(
-                        selected = selectedSportFilter == sport,
-                        onClick = {
-                            selectedSportFilter = if (selectedSportFilter == sport) null else sport
-                        },
-                        label = { Text(sport.thaiName) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                        )
-                    )
-                }
-            }
-        }
-
-        if (filteredWorkouts.isEmpty()) {
+        if (historyTopicTab == 1) {
             item {
                 Card(
-                    shape = RoundedCornerShape(22.dp),
+                    shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.History,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Text(
-                            text = "ยังไม่มีประวัติการออกกำลังกาย",
-                            style = MaterialTheme.typography.titleMedium,
-                            textAlign = TextAlign.Center
-                        )
-                        Text(
-                            text = "เริ่มต้นออกกำลังกายครั้งแรกแบบเวลาอิสระ เพื่อบันทึกสถิติแรกของคุณ",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (selectedChartTab == 0) "สถิติรายวัน (นาที)" else "สถิติรายสัปดาห์ (นาที)",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            SingleChoiceSegmentedButtonRow {
+                                listOf("รายวัน", "รายสัปดาห์").forEachIndexed { index, label ->
+                                    SegmentedButton(
+                                        selected = selectedChartTab == index,
+                                        onClick = { selectedChartTab = index },
+                                        shape = SegmentedButtonDefaults.itemShape(index = index, count = 2)
+                                    ) {
+                                        Text(label, style = MaterialTheme.typography.labelMedium)
+                                    }
+                                }
+                            }
+                        }
+
+                        ActivityBarChart(
+                            bars = if (selectedChartTab == 0) data.last7DaysBars else data.last4WeeksBars
                         )
                     }
                 }
             }
+
+            item {
+                val totalSteps = remember(data.workouts) { data.workouts.sumOf { it.steps } }
+                val totalMeters = remember(data.workouts) { data.workouts.sumOf { it.distanceMeters } }
+                val totalReps = remember(data.workouts) { data.workouts.sumOf { it.repsCount } }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    MetricTile(
+                        icon = Icons.AutoMirrored.Rounded.DirectionsWalk,
+                        label = "ก้าวสะสม",
+                        value = "$totalSteps",
+                        accentColor = EmeraldVibrant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricTile(
+                        icon = Icons.Rounded.Repeat,
+                        label = "ครั้งสะสม",
+                        value = "$totalReps",
+                        accentColor = AmberWarm,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricTile(
+                        icon = Icons.Rounded.Route,
+                        label = "ระยะทางรวม",
+                        value = DateStreakUtils.formatDistanceKm(totalMeters),
+                        accentColor = ForestGreen,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
         } else {
-            items(filteredWorkouts, key = { it.id }) { session ->
-                WorkoutHistoryRow(
-                    session = session,
-                    onClick = { inspectedSession = session }
-                )
+            // Sport filter chips
+            item {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    item {
+                        FilterChip(
+                            selected = selectedSportFilter == null,
+                            onClick = { selectedSportFilter = null },
+                            label = { Text("ทั้งหมด") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        )
+                    }
+                    items(SportType.entries) { sport ->
+                        FilterChip(
+                            selected = selectedSportFilter == sport,
+                            onClick = {
+                                selectedSportFilter = if (selectedSportFilter == sport) null else sport
+                            },
+                            label = { Text(sport.thaiName) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        )
+                    }
+                }
+            }
+
+            if (filteredWorkouts.isEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(22.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.History,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Text(
+                                text = "ยังไม่มีประวัติการออกกำลังกาย",
+                                style = MaterialTheme.typography.titleMedium,
+                                textAlign = TextAlign.Center
+                            )
+                            Text(
+                                text = "เริ่มต้นออกกำลังกายครั้งแรกแบบเวลาอิสระ เพื่อบันทึกสถิติแรกของคุณ",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(filteredWorkouts, key = { it.id }) { session ->
+                    WorkoutHistoryRow(
+                        session = session,
+                        onClick = { inspectedSession = session }
+                    )
+                }
             }
         }
     }
@@ -386,7 +448,7 @@ private fun WorkoutHistoryRow(
                 )
                 Text(
                     text = DateStreakUtils.formatDateTimeThai(session.startedAtMillis),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(4.dp))
@@ -402,13 +464,13 @@ private fun WorkoutHistoryRow(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         )
                     }
-                    if (session.workoutSubType.equals("HIIT", ignoreCase = true)) {
+                    if (session.repsCount > 0) {
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = EmeraldVibrant.copy(alpha = 0.15f)
+                            color = EmeraldVibrant.copy(alpha = 0.14f)
                         ) {
                             Text(
-                                text = "HIIT",
+                                text = "${session.repsCount} ครั้ง",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = ForestGreen,
                                 fontWeight = FontWeight.Bold,

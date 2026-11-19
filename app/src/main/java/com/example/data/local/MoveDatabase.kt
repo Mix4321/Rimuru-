@@ -46,6 +46,12 @@ interface MoveDao {
 
     @Query("DELETE FROM workouts WHERE id = :workoutId")
     suspend fun deleteWorkoutById(workoutId: String)
+
+    @Query("DELETE FROM workouts")
+    suspend fun clearAllWorkouts()
+
+    @Query("DELETE FROM user_profile")
+    suspend fun clearAllProfiles()
 }
 
 @Database(
@@ -170,6 +176,11 @@ class MoveRepository(private val dao: MoveDao) {
     suspend fun deleteWorkout(workoutId: String): Result<Unit> = runCatching {
         dao.deleteWorkoutById(workoutId)
         recalculateAndPersistStreak()
+    }
+
+    suspend fun clearLocalAccountData(): Result<Unit> = runCatching {
+        dao.clearAllWorkouts()
+        dao.clearAllProfiles()
     }
 
     suspend fun importWorkoutsFromBackup(

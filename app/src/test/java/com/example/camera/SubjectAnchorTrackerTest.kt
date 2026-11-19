@@ -153,4 +153,29 @@ class SubjectAnchorTrackerTest {
         tracker.clearLock()
         assertFalse(tracker.shouldUseRoiCrop())
     }
+
+    @Test
+    fun `standing to squat or floor pushup posture transition in same lane stays locked`() {
+        val tracker = SubjectAnchorTracker()
+        val imgW = 480f
+        val imgH = 640f
+        var t = 50_000L
+
+        // Acquire standing lock at upper-center (x=240, y=260, torso=120)
+        repeat(5) {
+            t += 40L
+            assertTrue(tracker.validateAndTrack(240f, 260f, 120f, imgW, imgH, t))
+        }
+        assertTrue(tracker.isLocked)
+
+        // User drops down vertically to floor push-up / deep squat in same horizontal lane (y=470, foreshortened scale=54)
+        repeat(4) { step ->
+            t += 60L
+            val y = 310f + step * 50f
+            val scale = 105f - step * 17f
+            val accepted = tracker.validateAndTrack(244f, y, scale, imgW, imgH, t)
+            assertTrue("Vertical posture transition step $step must stay accepted", accepted)
+            assertFalse("Posture transition must not mark primary user as foreign", tracker.isRecentlyBlockingForeign(t))
+        }
+    }
 }
