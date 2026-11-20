@@ -233,7 +233,8 @@ class WorkoutViewModel(
             caloriesExact = draft.caloriesExact,
             isRunning = false,
             hasStartedOnce = true,
-            trackingMode = draft.trackingMode
+            trackingMode = draft.trackingMode,
+            routePoints = RouteJsonCodec.decode(draft.routeJson)
         )
         loadProfileAndGhostRival(draft.sportType)
     }
@@ -380,10 +381,30 @@ class WorkoutViewModel(
             } else {
                 it.coachCue
             }
+            val seededRoute = if (
+                it.routePoints.isEmpty() &&
+                it.trackingMode == TrackingMode.SENSOR_GPS &&
+                it.sportType.supportsDistance &&
+                it.gpsSnapshot.hasFix &&
+                it.gpsSnapshot.currentLat != null &&
+                it.gpsSnapshot.currentLng != null
+            ) {
+                listOf(
+                    RoutePoint(
+                        lat = it.gpsSnapshot.currentLat,
+                        lng = it.gpsSnapshot.currentLng,
+                        speedKmh = it.gpsSnapshot.currentSpeedKmh,
+                        elapsedSec = it.elapsedSeconds
+                    )
+                )
+            } else {
+                it.routePoints
+            }
             it.copy(
                 isRunning = true,
                 hasStartedOnce = true,
                 startedAtMillis = if (it.startedAtMillis == 0L) System.currentTimeMillis() else it.startedAtMillis,
+                routePoints = seededRoute,
                 coachCue = startCue,
                 errorMessage = null
             )
@@ -546,9 +567,11 @@ class WorkoutViewModel(
                 speedKmh = speedKmh,
                 elapsedSec = state.elapsedSeconds
             )
-            val updated = if (state.routePoints.size >= 300) {
-                // Keep evenly thinned trail + newest point
-                state.routePoints.filterIndexed { i, _ -> i % 2 == 0 } + next
+            val updated = if (state.routePoints.size >= 600) {
+                // Always keep exact starting point (index 0) + evenly thinned trail + newest point
+                val head = state.routePoints.first()
+                val middle = state.routePoints.drop(1).filterIndexed { i, _ -> i % 2 == 0 }
+                listOf(head) + middle + next
             } else {
                 state.routePoints + next
             }
@@ -586,7 +609,34 @@ class WorkoutViewModel(
             if (state.trackingMode == TrackingMode.SENSOR_GPS && state.isRunning && snapshot.currentSpeedKmh >= 1.2f) {
                 lastMotionSeenMillis = now
             }
-            state.copy(gpsSnapshot = snapshot)
+            val mergedSnapshot = snapshot.copy(
+                currentLat = snapshot.currentLat ?: state.gpsSnapshot.currentLat,
+                currentLng = snapshot.currentLng ?: state.gpsSnapshot.currentLng
+            )
+            val updatedRoute = if (
+                state.isRunning &&
+                state.trackingMode == TrackingMode.SENSOR_GPS &&
+                state.sportType.supportsDistance &&
+                state.routePoints.isEmpty() &&
+                mergedSnapshot.hasFix &&
+                mergedSnapshot.currentLat != null &&
+                mergedSnapshot.currentLng != null
+            ) {
+                listOf(
+                    RoutePoint(
+                        lat = mergedSnapshot.currentLat,
+                        lng = mergedSnapshot.currentLng,
+                        speedKmh = mergedSnapshot.currentSpeedKmh,
+                        elapsedSec = state.elapsedSeconds
+                    )
+                )
+            } else {
+                state.routePoints
+            }
+            state.copy(
+                gpsSnapshot = mergedSnapshot,
+                routePoints = updatedRoute
+            )
         }
     }
 
@@ -823,7 +873,8 @@ class WorkoutViewModel(
                 repsCount = state.repsCount,
                 caloriesExact = state.caloriesExact,
                 isRunning = state.isRunning,
-                lastSavedEpochMillis = System.currentTimeMillis()
+                lastSavedEpochMillis = System.currentTimeMillis(),
+                routeJson = RouteJsonCodec.encode(state.routePoints)
             )
         )
     }

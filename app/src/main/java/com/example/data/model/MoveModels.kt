@@ -81,7 +81,8 @@ data class ActiveWorkoutDraft(
     val repsCount: Int = 0,
     val caloriesExact: Double,
     val isRunning: Boolean,
-    val lastSavedEpochMillis: Long
+    val lastSavedEpochMillis: Long,
+    val routeJson: String = ""
 )
 
 sealed interface UiState<out T> {

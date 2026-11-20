@@ -58,7 +58,9 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.GpsFixed
 import androidx.compose.material.icons.rounded.GpsNotFixed
+import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
@@ -136,6 +138,8 @@ import com.example.data.model.TrackingMode
 import com.example.domain.DateStreakUtils
 import com.example.sensors.DeviceMotionTracker
 import com.example.sensors.LocationDistanceTracker
+import com.example.ui.components.MoveMapStyle
+import com.example.ui.components.RealLiveTrackingMap
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.EmeraldVibrant
@@ -1573,6 +1577,253 @@ private fun SensorGpsStatusContent(
 ) {
     val gps = uiState.gpsSnapshot
     val sensor = uiState.sensorSnapshot
+    val needsPermPrompt = (uiState.sportType.supportsDistance && !uiState.locationPermissionGranted) ||
+        (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !uiState.activityPermissionGranted)
+
+    if (uiState.sportType.supportsDistance) {
+        var mapStyle by remember { mutableStateOf(MoveMapStyle.STREET) }
+        var followUser by remember { mutableStateOf(true) }
+        var recenterTick by remember { mutableIntStateOf(0) }
+
+        val livePaceLabel = remember(uiState.distanceMeters, uiState.elapsedSeconds) {
+            if (uiState.distanceMeters >= 50 && uiState.elapsedSeconds > 0) {
+                val secPerKm = (uiState.elapsedSeconds * 1000.0 / uiState.distanceMeters).toInt()
+                String.format(Locale.US, "%d:%02d น./กม.", secPerKm / 60, secPerKm % 60)
+            } else {
+                "--:-- น./กม."
+            }
+        }
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            RealLiveTrackingMap(
+                routePoints = uiState.routePoints,
+                currentLat = gps.currentLat,
+                currentLng = gps.currentLng,
+                accuracyMeters = gps.accuracyMeters,
+                mapStyle = mapStyle,
+                followUser = followUser,
+                recenterRequestTick = recenterTick,
+                onUserPanDetected = { followUser = false },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("live_real_route_map")
+            )
+
+            // Top HUD Overlay: Status pills + Map Layer/Follow buttons
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = if (uiState.isRunning && uiState.isCurrentlyMoving) {
+                            EmeraldVibrant.copy(alpha = 0.92f)
+                        } else {
+                            ForestGreenDeep.copy(alpha = 0.86f)
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Sensors,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = when {
+                                    !uiState.isRunning && !uiState.hasStartedOnce -> "พร้อมบันทึกเส้นทางบนแผนที่"
+                                    !uiState.isRunning -> "หยุดชั่วคราว"
+                                    uiState.isCurrentlyMoving -> "กำลัง${uiState.sportType.thaiName}จริง"
+                                    else -> "นิ่งอยู่ — เริ่มออกตัวได้เลย"
+                                },
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = ForestGreenDeep.copy(alpha = 0.84f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (gps.hasFix) Icons.Rounded.GpsFixed else Icons.Rounded.GpsNotFixed,
+                                contentDescription = null,
+                                tint = if (gps.hasFix) MintBright else AmberWarm,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = when {
+                                    !gps.hasLocationPermission -> "ไม่มีสิทธิ์ตำแหน่ง"
+                                    !gps.isGpsEnabled -> "กรุณาเปิด GPS"
+                                    gps.hasFix -> "${gps.providerLabel} ±${(gps.accuracyMeters ?: 0f).toInt()}ม. • ${uiState.routePoints.size} จุด"
+                                    else -> "กำลังจับสัญญาณ GPS..."
+                                },
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    IconButton(
+                        onClick = { mapStyle = mapStyle.next() },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(ForestGreenDeep.copy(alpha = 0.86f))
+                            .testTag("toggle_live_map_style_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Layers,
+                            contentDescription = "เปลี่ยนมุมมองแผนที่ (${mapStyle.thaiLabel})",
+                            tint = MintBright
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            followUser = true
+                            recenterTick++
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (followUser) ForestGreen.copy(alpha = 0.92f)
+                                else ForestGreenDeep.copy(alpha = 0.86f)
+                            )
+                            .testTag("recenter_live_map_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.MyLocation,
+                            contentDescription = "จัดตำแหน่งตามตัวผู้เล่น",
+                            tint = if (followUser) MintBright else Color.White
+                        )
+                    }
+                }
+            }
+
+            // Bottom HUD Overlay: Live Speed, Pace, Motion Bar or Permission Prompt
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (needsPermPrompt) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = ForestGreenDeep.copy(alpha = 0.92f),
+                        border = BorderStroke(1.dp, MintBright.copy(alpha = 0.6f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "อนุญาตสิทธิ์ตำแหน่ง (GPS) เพื่อปักหมุดและวาดเส้นทางวิ่ง/เดินบนแผนที่จริง",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            Button(
+                                onClick = onRequestPermissions,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("request_map_gps_permission_button")
+                            ) {
+                                Text("เปิดใช้งานตำแหน่งและ GPS", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = ForestGreenDeep.copy(alpha = 0.88f),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Speed,
+                                        contentDescription = null,
+                                        tint = MintBright,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = String.format(Locale.US, "%.1f กม./ชม.", gps.currentSpeedKmh),
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Text(
+                                    text = "เพซ $livePaceLabel",
+                                    color = MintBright,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = mapStyle.thaiLabel,
+                                    color = Color.White.copy(alpha = 0.72f),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                            LinearProgressIndicator(
+                                progress = { uiState.currentIntensity.coerceIn(0f, 1f) },
+                                color = MintBright,
+                                trackColor = Color.White.copy(alpha = 0.2f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
 
     Column(
         modifier = Modifier
@@ -1615,69 +1866,14 @@ private fun SensorGpsStatusContent(
                     )
                 }
             }
-
-            if (uiState.sportType.supportsDistance) {
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = Color.White.copy(alpha = 0.14f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (gps.hasFix) Icons.Rounded.GpsFixed else Icons.Rounded.GpsNotFixed,
-                            contentDescription = null,
-                            tint = if (gps.hasFix) MintBright else AmberWarm,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Text(
-                            text = when {
-                                !gps.hasLocationPermission -> "ไม่มีสิทธิ์ GPS"
-                                !gps.isGpsEnabled -> "GPS ปิดอยู่"
-                                gps.hasFix -> "GPS ±${(gps.accuracyMeters ?: 0f).toInt()}ม."
-                                else -> "กำลังจับ GPS..."
-                            },
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    }
-                }
-            }
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = sensor.sensorSourceLabel,
-                    color = MintBright,
-                    style = MaterialTheme.typography.labelLarge
-                )
-                if (uiState.sportType.supportsDistance) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Speed,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = String.format(Locale.US, "%.1f กม./ชม.", gps.currentSpeedKmh),
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
+            Text(
+                text = sensor.sensorSourceLabel,
+                color = MintBright,
+                style = MaterialTheme.typography.labelLarge
+            )
 
             LinearProgressIndicator(
                 progress = { uiState.currentIntensity.coerceIn(0f, 1f) },
@@ -1695,23 +1891,16 @@ private fun SensorGpsStatusContent(
             )
         }
 
-        val needsPermPrompt = (uiState.sportType.supportsDistance && !uiState.locationPermissionGranted) ||
-            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !uiState.activityPermissionGranted)
-
         if (needsPermPrompt) {
             OutlinedButton(
                 onClick = onRequestPermissions,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("อนุญาตสิทธิ์ GPS / ตัวนับก้าวเพื่อให้วัดแม่นยำ", color = MintBright)
+                Text("อนุญาตสิทธิ์ตัวนับก้าวเพื่อให้วัดแม่นยำ", color = MintBright)
             }
         } else {
             Text(
-                text = if (uiState.sportType.supportsDistance && !gps.hasFix) {
-                    "คำนวณระยะทางจากจำนวนก้าวจริงระหว่างรอ GPS (เหมาะกับในอาคาร)"
-                } else {
-                    "พกมือถือติดตัวขณะออกกำลังกาย ระบบจะนับก้าว ระยะทาง และแคลอรีจากการเคลื่อนไหวจริง"
-                },
+                text = "พกมือถือติดตัวขณะออกกำลังกาย ระบบจะนับก้าวและการเคลื่อนไหวจริง",
                 color = Color.White.copy(alpha = 0.78f),
                 style = MaterialTheme.typography.bodySmall
             )

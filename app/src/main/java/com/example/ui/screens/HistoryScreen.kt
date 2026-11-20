@@ -635,12 +635,12 @@ private fun WorkoutDetailSheet(
             }
         }
 
-        if (routePoints.size >= 2) {
+        if (routePoints.isNotEmpty()) {
             RouteMapCard(
                 routePoints = routePoints,
                 distanceMeters = session.distanceMeters,
                 durationSeconds = session.durationSeconds,
-                mapHeight = 160.dp
+                mapHeight = 200.dp
             )
         }
 

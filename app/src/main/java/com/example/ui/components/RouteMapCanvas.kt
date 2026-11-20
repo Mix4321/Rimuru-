@@ -1,46 +1,54 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CenterFocusStrong
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.RoutePoint
 import com.example.ui.theme.AmberWarm
-import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreenDeep
-import com.example.ui.theme.ForestGreenMedium
 import com.example.ui.theme.MintBright
 import kotlinx.serialization.json.Json
 import java.util.Locale
-import kotlin.math.max
 
 object RouteJsonCodec {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = false }
@@ -62,9 +70,13 @@ fun RouteMapCard(
     distanceMeters: Int,
     durationSeconds: Int,
     modifier: Modifier = Modifier,
-    mapHeight: Dp = 176.dp
+    mapHeight: Dp = 210.dp
 ) {
-    if (routePoints.size < 2) return
+    if (routePoints.isEmpty()) return
+
+    var mapStyle by remember { mutableStateOf(MoveMapStyle.STREET) }
+    var fitTriggerTick by remember { mutableIntStateOf(0) }
+    var showFullscreenMap by remember { mutableStateOf(false) }
 
     val maxSpeed = remember(routePoints) {
         routePoints.maxOfOrNull { it.speedKmh } ?: 0f
@@ -80,10 +92,123 @@ fun RouteMapCard(
         }
     }
 
+    if (showFullscreenMap) {
+        Dialog(
+            onDismissRequest = { showFullscreenMap = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = ForestGreenDeep
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                ) {
+                    RealStaticRouteMap(
+                        routePoints = routePoints,
+                        mapStyle = mapStyle,
+                        fitTriggerTick = fitTriggerTick,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Top bar overlay
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = ForestGreenDeep.copy(alpha = 0.88f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Rounded.Route, contentDescription = null, tint = MintBright, modifier = Modifier.size(18.dp))
+                                Text(
+                                    text = "แผนที่เส้นทางจริง (${routePoints.size} จุด) • เพซ $avgPaceLabel",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            IconButton(
+                                onClick = { mapStyle = mapStyle.next() },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(ForestGreenDeep.copy(alpha = 0.88f))
+                            ) {
+                                Icon(Icons.Rounded.Layers, contentDescription = "สลับรูปแบบแผนที่", tint = MintBright)
+                            }
+                            IconButton(
+                                onClick = { fitTriggerTick++ },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(ForestGreenDeep.copy(alpha = 0.88f))
+                            ) {
+                                Icon(Icons.Rounded.CenterFocusStrong, contentDescription = "ปรับภาพพอดีเส้นทาง", tint = Color.White)
+                            }
+                            IconButton(
+                                onClick = { showFullscreenMap = false },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(ForestGreenDeep.copy(alpha = 0.88f))
+                            ) {
+                                Icon(Icons.Rounded.Close, contentDescription = "ปิดแผนที่เต็มจอ", tint = Color.White)
+                            }
+                        }
+                    }
+
+                    // Bottom legend overlay
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = ForestGreenDeep.copy(alpha = 0.88f),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(16.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "• เขียว: เดิน/ช้า  • ฟ้า: วิ่ง  • ส้ม: สปรินต์ (${mapStyle.thaiLabel})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.86f)
+                            )
+                            Text(
+                                text = String.format(Locale.US, "สูงสุด %.1f กม./ชม.", maxSpeed),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = AmberWarm,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = ForestGreenDeep,
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("real_route_map_card")
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -105,7 +230,7 @@ fun RouteMapCard(
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
-                        text = "เส้นทาง GPS (${routePoints.size} จุด)",
+                        text = "แผนที่เส้นทางจริง (${routePoints.size} จุด)",
                         style = MaterialTheme.typography.labelLarge,
                         color = Color.White,
                         fontWeight = FontWeight.Bold
@@ -124,76 +249,78 @@ fun RouteMapCard(
                     .fillMaxWidth()
                     .height(mapHeight)
                     .clip(RoundedCornerShape(14.dp))
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(ForestGreenMedium.copy(alpha = 0.42f), ForestGreenDeep)
-                        )
-                    )
             ) {
-                Canvas(modifier = Modifier.fillMaxSize().padding(14.dp)) {
-                    val minLat = routePoints.minOf { it.lat }
-                    val maxLat = routePoints.maxOf { it.lat }
-                    val minLng = routePoints.minOf { it.lng }
-                    val maxLng = routePoints.maxOf { it.lng }
+                RealStaticRouteMap(
+                    routePoints = routePoints,
+                    mapStyle = mapStyle,
+                    fitTriggerTick = fitTriggerTick,
+                    modifier = Modifier.fillMaxSize()
+                )
 
-                    val latSpan = max(1e-5, maxLat - minLat)
-                    val lngSpan = max(1e-5, maxLng - minLng)
-                    val scale = minOf(size.width / lngSpan.toFloat(), size.height / latSpan.toFloat()) * 0.88f
-                    val xOffset = (size.width - (lngSpan.toFloat() * scale)) / 2f
-                    val yOffset = (size.height - (latSpan.toFloat() * scale)) / 2f
-
-                    // Subtle radar grid lines
-                    val gridColor = Color.White.copy(alpha = 0.08f)
-                    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f)
-                    for (i in 1..3) {
-                        val y = size.height * (i / 4f)
-                        drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.5f, pathEffect = dashEffect)
-                        val x = size.width * (i / 4f)
-                        drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.5f, pathEffect = dashEffect)
-                    }
-
-                    val mapped = routePoints.map { pt ->
-                        val px = xOffset + ((pt.lng - minLng).toFloat() * scale)
-                        val py = size.height - (yOffset + ((pt.lat - minLat).toFloat() * scale))
-                        Offset(px, py) to pt.speedKmh
-                    }
-
-                    for (i in 0 until mapped.lastIndex) {
-                        val (p1, _) = mapped[i]
-                        val (p2, speed) = mapped[i + 1]
-                        val segColor = when {
-                            speed >= 11f -> AmberWarm
-                            speed >= 6f -> MintBright
-                            else -> EmeraldVibrant
-                        }
-                        drawLine(
-                            color = segColor,
-                            start = p1,
-                            end = p2,
-                            strokeWidth = 8f,
-                            cap = StrokeCap.Round
+                // Compact top-right map action pills
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    IconButton(
+                        onClick = { mapStyle = mapStyle.next() },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(ForestGreenDeep.copy(alpha = 0.82f))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Layers,
+                            contentDescription = "เปลี่ยนสไตล์แผนที่ (${mapStyle.thaiLabel})",
+                            tint = MintBright,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
-
-                    // Start & Finish nodes
-                    val startPt = mapped.first().first
-                    val endPt = mapped.last().first
-                    drawCircle(color = MintBright, radius = 9f, center = startPt)
-                    drawCircle(color = Color.White, radius = 4f, center = startPt)
-                    drawCircle(color = AmberWarm, radius = 11f, center = endPt)
-                    drawCircle(color = Color.White, radius = 11f, center = endPt, style = Stroke(width = 3f))
+                    IconButton(
+                        onClick = { fitTriggerTick++ },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(ForestGreenDeep.copy(alpha = 0.82f))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.CenterFocusStrong,
+                            contentDescription = "จัดมุมกล้องพอดีเส้นทาง",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { showFullscreenMap = true },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(ForestGreenDeep.copy(alpha = 0.82f))
+                            .testTag("expand_route_map_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Fullscreen,
+                            contentDescription = "ขยายแผนที่เต็มจอ",
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "• เขียว: เดิน/ช้า   • สว่าง: เร็ว   • ทอง: สปรินต์",
+                    text = "• เขียว: เดิน/ช้า  • ฟ้า: วิ่ง  • ส้ม: สปรินต์",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.72f)
+                    color = Color.White.copy(alpha = 0.78f)
                 )
+                Spacer(modifier = Modifier.size(4.dp))
                 Text(
                     text = String.format(Locale.US, "สูงสุด %.1f กม./ชม.", maxSpeed),
                     style = MaterialTheme.typography.labelSmall,

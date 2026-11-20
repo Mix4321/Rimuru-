@@ -13,6 +13,12 @@ import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.example.data.local.DetectionSensitivity
 import com.example.data.model.SportType
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -21,7 +27,10 @@ data class GpsTrackingSnapshot(
     val isGpsEnabled: Boolean = false,
     val hasFix: Boolean = false,
     val accuracyMeters: Float? = null,
-    val currentSpeedKmh: Float = 0f
+    val currentSpeedKmh: Float = 0f,
+    val currentLat: Double? = null,
+    val currentLng: Double? = null,
+    val providerLabel: String = "GPS"
 )
 
 class LocationDistanceTracker(
@@ -34,12 +43,27 @@ class LocationDistanceTracker(
 ) : LocationListener {
 
     private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    private val fusedClient: FusedLocationProviderClient? = runCatching {
+        LocationServices.getFusedLocationProviderClient(context.applicationContext)
+    }.getOrNull()
+
     private var isStarted = false
+    private var usingFusedClient = false
     private var lastValidLocation: Location? = null
     private var pendingMetersBuffer: Float = 0f
     private var smoothedSpeedKmh: Float = 0f
     private var lastValidSpeedMps: Float = 0f
     private var stationaryStreak: Int = 0
+    private var latestLat: Double? = null
+    private var latestLng: Double? = null
+
+    private val fusedCallback = object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+            for (loc in result.locations) {
+                onLocationChanged(loc)
+            }
+        }
+    }
 
     fun hasLocationPermission(): Boolean {
         val fine = ContextCompat.checkSelfPermission(
@@ -53,19 +77,23 @@ class LocationDistanceTracker(
         return fine || coarse
     }
 
+    private fun isLocationServiceEnabled(): Boolean {
+        val gps = runCatching { locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)
+        val net = runCatching { locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) }.getOrDefault(false)
+        return gps || net
+    }
+
     @SuppressLint("MissingPermission")
     fun start() {
         stop()
         val hasPerm = hasLocationPermission()
-        val gpsEnabled = runCatching {
-            locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
-        }.getOrDefault(false)
+        val locationEnabled = isLocationServiceEnabled()
 
         if (!hasPerm) {
             onGpsStateChanged(
                 GpsTrackingSnapshot(
                     hasLocationPermission = false,
-                    isGpsEnabled = gpsEnabled,
+                    isGpsEnabled = locationEnabled,
                     hasFix = false
                 )
             )
@@ -79,28 +107,62 @@ class LocationDistanceTracker(
         stationaryStreak = 0
 
         var registeredAny = false
-        if (gpsEnabled) {
+        usingFusedClient = false
+
+        // 1. Prefer Google Play Services FusedLocationProviderClient for rapid 1-2s GNSS+Wi-Fi lock
+        val client = fusedClient
+        if (client != null) {
+            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
+                .setMinUpdateIntervalMillis(500L)
+                .setMinUpdateDistanceMeters(1.2f)
+                .setWaitForAccurateLocation(false)
+                .build()
+
             runCatching {
-                locationManager.requestLocationUpdates(
-                    LocationManager.GPS_PROVIDER,
-                    1000L,
-                    1.5f,
-                    this,
-                    Looper.getMainLooper()
-                )
+                client.requestLocationUpdates(request, fusedCallback, Looper.getMainLooper())
                 registeredAny = true
+                usingFusedClient = true
+            }
+
+            // Warm-start live map with recent cached location (< 2 min old) so map centers immediately
+            if (registeredAny) {
+                runCatching {
+                    client.lastLocation.addOnSuccessListener { cached ->
+                        if (!isStarted || cached == null) return@addOnSuccessListener
+                        val ageMs = System.currentTimeMillis() - cached.time
+                        if (ageMs in 0..120_000L && latestLat == null) {
+                            latestLat = cached.latitude
+                            latestLng = cached.longitude
+                            val acc = if (cached.hasAccuracy()) cached.accuracy else null
+                            onGpsStateChanged(
+                                GpsTrackingSnapshot(
+                                    hasLocationPermission = true,
+                                    isGpsEnabled = locationEnabled,
+                                    hasFix = lastValidLocation != null,
+                                    accuracyMeters = acc,
+                                    currentSpeedKmh = smoothedSpeedKmh,
+                                    currentLat = cached.latitude,
+                                    currentLng = cached.longitude,
+                                    providerLabel = "Fused GPS"
+                                )
+                            )
+                        }
+                    }
+                }
             }
         }
 
-        if (!registeredAny && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val hasFused = runCatching {
-                locationManager.allProviders.contains(LocationManager.FUSED_PROVIDER)
+        // 2. Always keep LocationManager fallback if Fused isn't active
+        if (!registeredAny) {
+            val gpsEnabled = runCatching {
+                locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
             }.getOrDefault(false)
-            if (hasFused) {
+
+            if (gpsEnabled) {
                 runCatching {
                     locationManager.requestLocationUpdates(
-                        LocationManager.FUSED_PROVIDER,
-                        1400L,
+                        LocationManager.GPS_PROVIDER,
+                        1000L,
                         1.5f,
                         this,
                         Looper.getMainLooper()
@@ -108,22 +170,40 @@ class LocationDistanceTracker(
                     registeredAny = true
                 }
             }
-        }
 
-        if (!registeredAny) {
-            val netEnabled = runCatching {
-                locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-            }.getOrDefault(false)
-            if (netEnabled) {
-                runCatching {
-                    locationManager.requestLocationUpdates(
-                        LocationManager.NETWORK_PROVIDER,
-                        2000L,
-                        2.5f,
-                        this,
-                        Looper.getMainLooper()
-                    )
-                    registeredAny = true
+            if (!registeredAny && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val hasFused = runCatching {
+                    locationManager.allProviders.contains(LocationManager.FUSED_PROVIDER)
+                }.getOrDefault(false)
+                if (hasFused) {
+                    runCatching {
+                        locationManager.requestLocationUpdates(
+                            LocationManager.FUSED_PROVIDER,
+                            1200L,
+                            1.5f,
+                            this,
+                            Looper.getMainLooper()
+                        )
+                        registeredAny = true
+                    }
+                }
+            }
+
+            if (!registeredAny) {
+                val netEnabled = runCatching {
+                    locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+                }.getOrDefault(false)
+                if (netEnabled) {
+                    runCatching {
+                        locationManager.requestLocationUpdates(
+                            LocationManager.NETWORK_PROVIDER,
+                            1800L,
+                            2.5f,
+                            this,
+                            Looper.getMainLooper()
+                        )
+                        registeredAny = true
+                    }
                 }
             }
         }
@@ -132,16 +212,23 @@ class LocationDistanceTracker(
         onGpsStateChanged(
             GpsTrackingSnapshot(
                 hasLocationPermission = true,
-                isGpsEnabled = gpsEnabled,
-                hasFix = false
+                isGpsEnabled = locationEnabled,
+                hasFix = false,
+                currentLat = latestLat,
+                currentLng = latestLng,
+                providerLabel = if (usingFusedClient) "Fused GPS" else "GPS"
             )
         )
     }
 
     fun stop() {
         if (isStarted) {
+            if (usingFusedClient) {
+                runCatching { fusedClient?.removeLocationUpdates(fusedCallback) }
+            }
             runCatching { locationManager.removeUpdates(this) }
             isStarted = false
+            usingFusedClient = false
         }
     }
 
@@ -151,6 +238,13 @@ class LocationDistanceTracker(
         val sport = sportProvider()
         val sensitivity = sensitivityProvider()
         val accuracy = if (location.hasAccuracy()) location.accuracy else 999f
+        val label = if (usingFusedClient) "Fused GPS" else (location.provider?.uppercase() ?: "GPS")
+
+        // Always update approximate map center if accuracy is at least reasonable (<= 85m)
+        if (accuracy <= 85f) {
+            latestLat = location.latitude
+            latestLng = location.longitude
+        }
 
         if (accuracy > sensitivity.gpsMaxAccuracyMeters) {
             onGpsStateChanged(
@@ -159,11 +253,17 @@ class LocationDistanceTracker(
                     isGpsEnabled = true,
                     hasFix = lastValidLocation != null,
                     accuracyMeters = accuracy,
-                    currentSpeedKmh = smoothedSpeedKmh
+                    currentSpeedKmh = smoothedSpeedKmh,
+                    currentLat = latestLat ?: location.latitude,
+                    currentLng = latestLng ?: location.longitude,
+                    providerLabel = label
                 )
             )
             return
         }
+
+        latestLat = location.latitude
+        latestLng = location.longitude
 
         val prev = lastValidLocation
         if (prev == null) {
@@ -178,7 +278,10 @@ class LocationDistanceTracker(
                     isGpsEnabled = true,
                     hasFix = true,
                     accuracyMeters = accuracy,
-                    currentSpeedKmh = smoothedSpeedKmh
+                    currentSpeedKmh = smoothedSpeedKmh,
+                    currentLat = location.latitude,
+                    currentLng = location.longitude,
+                    providerLabel = label
                 )
             )
             return
@@ -188,12 +291,12 @@ class LocationDistanceTracker(
         val dtSec = ((location.time - prev.time).coerceAtLeast(250L)) / 1000.0f
         val impliedSpeedMps = deltaMeters / dtSec
         val maxPlausibleSpeedMps = when (sport) {
-            SportType.WALKING -> 3.6f   // ~13 km/h
-            SportType.CYCLING -> 18.5f  // ~66 km/h
-            else -> 9.5f                // ~34 km/h running / field sports
+            SportType.WALKING -> 3.8f   // ~13.7 km/h
+            SportType.CYCLING -> 19.5f  // ~70 km/h
+            else -> 9.8f                // ~35 km/h running / field sports
         }
         val maxAccelSpike = lastValidSpeedMps + 4.8f * dtSec + 3.5f
-        val minDriftThreshold = max(2.2f, accuracy * 0.36f)
+        val minDriftThreshold = max(2.0f, accuracy * 0.34f)
 
         val isGenuineMovement = deltaMeters >= minDriftThreshold &&
             impliedSpeedMps in 0.35f..minOf(maxPlausibleSpeedMps, maxAccelSpike)
@@ -236,7 +339,10 @@ class LocationDistanceTracker(
                 isGpsEnabled = true,
                 hasFix = true,
                 accuracyMeters = accuracy,
-                currentSpeedKmh = displaySpeedKmh
+                currentSpeedKmh = displaySpeedKmh,
+                currentLat = location.latitude,
+                currentLng = location.longitude,
+                providerLabel = label
             )
         )
     }
@@ -248,18 +354,25 @@ class LocationDistanceTracker(
         onGpsStateChanged(
             GpsTrackingSnapshot(
                 hasLocationPermission = hasLocationPermission(),
-                isGpsEnabled = true,
-                hasFix = lastValidLocation != null
+                isGpsEnabled = isLocationServiceEnabled(),
+                hasFix = lastValidLocation != null,
+                currentLat = latestLat,
+                currentLng = latestLng,
+                providerLabel = if (usingFusedClient) "Fused GPS" else "GPS"
             )
         )
     }
 
     override fun onProviderDisabled(provider: String) {
+        val enabled = isLocationServiceEnabled()
         onGpsStateChanged(
             GpsTrackingSnapshot(
                 hasLocationPermission = hasLocationPermission(),
-                isGpsEnabled = false,
-                hasFix = false
+                isGpsEnabled = enabled,
+                hasFix = if (enabled) lastValidLocation != null else false,
+                currentLat = latestLat,
+                currentLng = latestLng,
+                providerLabel = if (usingFusedClient) "Fused GPS" else "GPS"
             )
         )
     }

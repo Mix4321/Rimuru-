@@ -32,6 +32,7 @@ class WorkoutDraftStore(private val context: Context) {
         val CALORIES_EXACT = doublePreferencesKey("calories_exact")
         val IS_RUNNING = booleanPreferencesKey("is_running")
         val LAST_SAVED_MS = longPreferencesKey("last_saved_ms")
+        val ROUTE_JSON = stringPreferencesKey("route_json")
     }
 
     fun observeDraft(userId: String): Flow<ActiveWorkoutDraft?> =
@@ -56,7 +57,8 @@ class WorkoutDraftStore(private val context: Context) {
                     repsCount = prefs[Keys.REPS_COUNT] ?: 0,
                     caloriesExact = prefs[Keys.CALORIES_EXACT] ?: 0.0,
                     isRunning = prefs[Keys.IS_RUNNING] ?: false,
-                    lastSavedEpochMillis = prefs[Keys.LAST_SAVED_MS] ?: System.currentTimeMillis()
+                    lastSavedEpochMillis = prefs[Keys.LAST_SAVED_MS] ?: System.currentTimeMillis(),
+                    routeJson = prefs[Keys.ROUTE_JSON] ?: ""
                 )
             }
         }
@@ -76,6 +78,7 @@ class WorkoutDraftStore(private val context: Context) {
             prefs[Keys.CALORIES_EXACT] = draft.caloriesExact
             prefs[Keys.IS_RUNNING] = draft.isRunning
             prefs[Keys.LAST_SAVED_MS] = draft.lastSavedEpochMillis
+            prefs[Keys.ROUTE_JSON] = draft.routeJson
         }
     }
 

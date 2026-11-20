@@ -176,12 +176,12 @@ fun WorkoutAdvancedOptionsSheet(
             GhostPacerDuelCard(uiState = uiState)
         }
 
-        if (uiState.routePoints.size >= 2) {
+        if (uiState.routePoints.isNotEmpty()) {
             RouteMapCard(
                 routePoints = uiState.routePoints,
                 distanceMeters = uiState.distanceMeters,
                 durationSeconds = uiState.elapsedSeconds,
-                mapHeight = 160.dp
+                mapHeight = 190.dp
             )
         }
 
@@ -401,12 +401,12 @@ fun PostWorkoutSummaryScreen(
                     }
                 }
 
-                if (routePoints.size >= 2) {
+                if (routePoints.isNotEmpty()) {
                     RouteMapCard(
                         routePoints = routePoints,
                         distanceMeters = session.distanceMeters,
                         durationSeconds = session.durationSeconds,
-                        mapHeight = 152.dp
+                        mapHeight = 200.dp
                     )
                 }
 
