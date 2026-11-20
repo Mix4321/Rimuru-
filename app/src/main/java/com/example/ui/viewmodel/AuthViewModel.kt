@@ -189,7 +189,14 @@ class AuthViewModel(
                 Log.w(TAG, "Google Web OAuth sign-in failed", e)
                 isCompletingInlineRegistration = false
                 _isBusy.value = false
-                _errorMessage.value = "เข้าสู่ระบบผ่านเบราว์เซอร์ไม่สำเร็จ: ${e.localizedMessage ?: "กรุณาลองอีกครั้ง"}"
+                val msg = e.localizedMessage.orEmpty()
+                _errorMessage.value = if (msg.contains("package certificate hash", ignoreCase = true) ||
+                    msg.contains("CERT_HASH", ignoreCase = true)
+                ) {
+                    "ลายเซ็น SHA-1 ของ APK นี้ยังไม่ตรงกับที่ลงทะเบียนไว้ใน Firebase (ต้องสร้าง APK ด้วย debug.keystore เดิมของโปรเจกต์ หรือเพิ่ม SHA-1 ใน Firebase Console)"
+                } else {
+                    "เข้าสู่ระบบผ่านเบราว์เซอร์ไม่สำเร็จ: ${msg.ifBlank { "กรุณาลองอีกครั้ง" }}"
+                }
             }
         }
     }

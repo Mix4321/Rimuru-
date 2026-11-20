@@ -229,10 +229,14 @@ fun AuthScreen(
             } catch (e: GetCredentialCancellationException) {
                 val rawMsg = (e.errorMessage?.toString() ?: e.message ?: "").trim()
                 Log.w(AUTH_TAG, "Google Sign-In cancelled or dismissed: $rawMsg", e)
-                val hint = if (rawMsg.isNotBlank() && !rawMsg.contains("cancelled by the user", ignoreCase = true)) {
-                    "ยกเลิกหรือไม่สามารถยืนยันบัญชี Google ($rawMsg) กรุณาลองเลือกบัญชีอีกครั้ง หรือใช้วิธีเข้าสู่ระบบผ่านเบราว์เซอร์ด้านล่าง"
-                } else {
-                    "การเลือกบัญชี Google ถูกยกเลิกหรือระบบปฏิเสธคำขอ หากเลือกบัญชีแล้วเด้งออก ให้กดปุ่ม \"เข้าสู่ระบบผ่านเบราว์เซอร์\" ด้านล่าง"
+                val hint = when {
+                    rawMsg.contains("Account reauth failed", ignoreCase = true) ||
+                        rawMsg.contains("28444") ->
+                        "ลายเซ็น SHA-1 ของ APK นี้ไม่ตรงกับ Google Sign-In ใน Firebase ($rawMsg) กรุณาใช้ APK ที่เซ็นด้วย keystore เดิมหรือเพิ่ม SHA-1 ใน Firebase"
+                    rawMsg.isNotBlank() && !rawMsg.contains("cancelled by the user", ignoreCase = true) ->
+                        "ยกเลิกหรือไม่สามารถยืนยันบัญชี Google ($rawMsg) กรุณาลองเลือกบัญชีอีกครั้ง หรือใช้วิธีเข้าสู่ระบบผ่านเบราว์เซอร์ด้านล่าง"
+                    else ->
+                        "การเลือกบัญชี Google ถูกยกเลิกหรือระบบปฏิเสธคำขอ หากเลือกบัญชีแล้วเด้งออก ให้กดปุ่ม \"เข้าสู่ระบบผ่านเบราว์เซอร์\" ด้านล่าง"
                 }
                 onAuthError(hint)
             } catch (e: NoCredentialException) {
@@ -263,7 +267,11 @@ fun AuthScreen(
                 val detail = e.errorMessage?.toString()?.takeIf { it.isNotBlank() }
                     ?: e.localizedMessage
                     ?: e.type
-                onAuthError("ไม่สามารถเชื่อมต่อ Google Sign-In ($detail) กรุณาลองเข้าสู่ระบบผ่านเบราว์เซอร์ด้านล่าง")
+                if (detail.contains("28444") || detail.contains("Developer console", ignoreCase = true)) {
+                    onAuthError("ลายเซ็น SHA-1 ของ APK ยังไม่ตรงกับ Firebase ($detail) กรุณาใช้ APK จาก AI Studio หรือเพิ่ม DEBUG_KEYSTORE_BASE64 ใน GitHub Secrets")
+                } else {
+                    onAuthError("ไม่สามารถเชื่อมต่อ Google Sign-In ($detail) กรุณาลองเข้าสู่ระบบผ่านเบราว์เซอร์ด้านล่าง")
+                }
             } catch (e: Exception) {
                 Log.w(AUTH_TAG, "Unexpected auth error", e)
                 onAuthError("เกิดข้อผิดพลาดในการเข้าสู่ระบบ: ${e.localizedMessage ?: "กรุณาลองอีกครั้ง"}")

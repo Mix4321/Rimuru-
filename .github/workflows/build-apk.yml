@@ -27,14 +27,55 @@ jobs:
           yes | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       - name: Prepare debug keystore and env
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
-          if [ ! -f debug.keystore ]; then
-            if [ -f debug.keystore.base64 ]; then
-              base64 -d debug.keystore.base64 > debug.keystore
-            else
-              keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-            fi
-          fi
+          python3 - <<'PY'
+          import base64
+          import os
+          import re
+          import subprocess
+
+          if not os.path.exists("debug.keystore"):
+              b64_source = ""
+              if os.path.exists("debug.keystore.base64"):
+                  with open("debug.keystore.base64", "r", encoding="utf-8", errors="ignore") as f:
+                      b64_source = f.read()
+                  print("Decoding debug.keystore from debug.keystore.base64 in repository.")
+              elif os.environ.get("DEBUG_KEYSTORE_BASE64"):
+                  b64_source = os.environ["DEBUG_KEYSTORE_BASE64"]
+                  print("Decoding debug.keystore from DEBUG_KEYSTORE_BASE64 GitHub Secret.")
+
+              if b64_source:
+                  cleaned = re.sub(r"\s+", "", b64_source).strip("\"'")
+                  cleaned = cleaned.replace("-", "+").replace("_", "/")
+                  cleaned = re.sub(r"[^A-Za-z0-9+/=]", "", cleaned).rstrip("=")
+                  cleaned += "=" * ((-len(cleaned)) % 4)
+                  try:
+                      with open("debug.keystore", "wb") as out:
+                          out.write(base64.b64decode(cleaned))
+                  except Exception as exc:
+                      print(f"::warning::Failed to decode debug.keystore base64 ({exc}); generating fallback debug.keystore.")
+                      if os.path.exists("debug.keystore"):
+                          os.remove("debug.keystore")
+
+          if not os.path.exists("debug.keystore"):
+              print("::warning::Neither debug.keystore.base64 nor DEBUG_KEYSTORE_BASE64 secret was found. Generating a new debug.keystore (Google Sign-In requires its SHA-1 to be registered in Firebase Console).")
+              subprocess.run(
+                  [
+                      "keytool", "-genkeypair", "-v",
+                      "-keystore", "debug.keystore",
+                      "-storepass", "android",
+                      "-alias", "androiddebugkey",
+                      "-keypass", "android",
+                      "-keyalg", "RSA",
+                      "-keysize", "2048",
+                      "-validity", "10000",
+                      "-dname", "CN=Android Debug,O=Android,C=US",
+                  ],
+                  check=True,
+              )
+          PY
           if [ ! -f .env ]; then
             if [ -f .env.example ]; then
               cp .env.example .env
@@ -115,6 +156,50 @@ jobs:
               print(f"Prepared {target} from GitHub Secret.")
           else:
               print("Proceeding without app/google-services.json (APK will still compile).")
+          PY
+
+      - name: Verify APK signing SHA-1 matches google-services.json
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          out = subprocess.check_output(
+              [
+                  "keytool", "-list", "-v",
+                  "-keystore", "debug.keystore",
+                  "-storepass", "android",
+                  "-alias", "androiddebugkey",
+              ],
+              text=True,
+              stderr=subprocess.STDOUT,
+          )
+          sha1_match = re.search(r"SHA1:\s*([0-9A-Fa-f:]+)", out)
+          sha256_match = re.search(r"SHA256:\s*([0-9A-Fa-f:]+)", out)
+          sha1_colon = sha1_match.group(1).upper() if sha1_match else ""
+          sha1_hex = sha1_colon.replace(":", "").lower()
+          print(f"Debug APK SHA-1:   {sha1_colon}")
+          if sha256_match:
+              print(f"Debug APK SHA-256: {sha256_match.group(1).upper()}")
+
+          gs_path = "app/google-services.json"
+          if os.path.exists(gs_path) and sha1_hex:
+              with open(gs_path, "r", encoding="utf-8") as f:
+                  gs = json.load(f)
+              registered = set()
+              for client in gs.get("client", []):
+                  for oauth in client.get("oauth_client", []):
+                      cert = oauth.get("android_info", {}).get("certificate_hash", "")
+                      if cert:
+                          registered.add(cert.replace(":", "").lower())
+              if registered and sha1_hex not in registered:
+                  print(
+                      f"::warning::APK SHA-1 ({sha1_colon}) does NOT match certificate_hash in app/google-services.json ({', '.join(sorted(registered))}). "
+                      "Google Sign-In will fail with '[16] Account reauth failed' or 'package certificate hash'. "
+                      "Fix: Add DEBUG_KEYSTORE_BASE64 (from debug.keystore.base64) to GitHub Secrets, or add this SHA-1 in Firebase Console."
+                  )
           PY
 
       - name: Set up Gradle 9.3.1
