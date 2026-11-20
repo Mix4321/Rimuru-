@@ -1,5 +1,6 @@
 package com.example.ui.viewmodel
 
+import android.app.Activity
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,7 +10,9 @@ import com.example.data.local.MoveRepository
 import com.example.data.local.SettingsStore
 import com.example.data.model.UserProfile
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.OAuthProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -91,6 +94,11 @@ class AuthViewModel(
 
     init {
         auth.addAuthStateListener(authStateListener)
+        auth.pendingAuthResult?.addOnFailureListener { err ->
+            Log.w(TAG, "Pending OAuth sign-in failed", err)
+            _isBusy.value = false
+            _errorMessage.value = err.localizedMessage ?: "เข้าสู่ระบบผ่านเบราว์เซอร์ไม่สำเร็จ"
+        }
     }
 
     fun selectModeTab(tab: AuthModeTab) {
@@ -120,29 +128,14 @@ class AuthViewModel(
                 val credential = GoogleAuthProvider.getCredential(idToken, null)
                 val authResult = auth.signInWithCredential(credential).await()
                 val user = authResult.user ?: error("ไม่พบข้อมูลบัญชี Google หลังยืนยันตัวตน")
-
-                if (isRegisterFlow) {
-                    val resolvedName = prefilledName?.takeIf { it.isNotBlank() }
-                        ?: user.displayName?.takeIf { it.isNotBlank() }
-                        ?: "นักกีฬา MOVE"
-                    saveRegistrationAndSync(
-                        uid = user.uid,
-                        displayName = resolvedName,
-                        email = user.email,
-                        photoUrl = user.photoUrl?.toString(),
-                        weightKg = prefilledWeight ?: 65f,
-                        heightCm = prefilledHeight ?: 170f,
-                        dailyGoalMinutes = prefilledGoalMinutes ?: 0
-                    )
-                    isCompletingInlineRegistration = false
-                } else if (activeResolutionUid != user.uid && _gateState.value !is AuthGateState.Authenticated) {
-                    resolveAuthenticatedUser(
-                        uid = user.uid,
-                        googleName = user.displayName,
-                        email = user.email,
-                        photoUrl = user.photoUrl?.toString()
-                    )
-                }
+                finalizeSignedInUser(
+                    user = user,
+                    isRegisterFlow = isRegisterFlow,
+                    prefilledName = prefilledName,
+                    prefilledWeight = prefilledWeight,
+                    prefilledHeight = prefilledHeight,
+                    prefilledGoalMinutes = prefilledGoalMinutes
+                )
             } catch (e: CancellationException) {
                 isCompletingInlineRegistration = false
                 throw e
@@ -152,6 +145,84 @@ class AuthViewModel(
                 _isBusy.value = false
                 _errorMessage.value = e.localizedMessage ?: "เข้าสู่ระบบไม่สำเร็จ กรุณาลองอีกครั้ง"
             }
+        }
+    }
+
+    fun signInWithGoogleWebOAuth(
+        activity: Activity,
+        isRegisterFlow: Boolean,
+        prefilledName: String? = null,
+        prefilledWeight: Float? = null,
+        prefilledHeight: Float? = null,
+        prefilledGoalMinutes: Int? = null
+    ) {
+        if (_isBusy.value) return
+        preferredTab = if (isRegisterFlow) AuthModeTab.REGISTER else AuthModeTab.LOGIN
+        isCompletingInlineRegistration = isRegisterFlow
+        _isBusy.value = true
+        _errorMessage.value = null
+
+        viewModelScope.launch {
+            try {
+                val pending = auth.pendingAuthResult
+                val authResult = if (pending != null) {
+                    pending.await()
+                } else {
+                    val provider = OAuthProvider.newBuilder("google.com")
+                        .addCustomParameter("prompt", "select_account")
+                        .build()
+                    auth.startActivityForSignInWithProvider(activity, provider).await()
+                }
+                val user = authResult.user ?: error("ไม่พบข้อมูลบัญชี Google หลังยืนยันตัวตน")
+                finalizeSignedInUser(
+                    user = user,
+                    isRegisterFlow = isRegisterFlow,
+                    prefilledName = prefilledName,
+                    prefilledWeight = prefilledWeight,
+                    prefilledHeight = prefilledHeight,
+                    prefilledGoalMinutes = prefilledGoalMinutes
+                )
+            } catch (e: CancellationException) {
+                isCompletingInlineRegistration = false
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Google Web OAuth sign-in failed", e)
+                isCompletingInlineRegistration = false
+                _isBusy.value = false
+                _errorMessage.value = "เข้าสู่ระบบผ่านเบราว์เซอร์ไม่สำเร็จ: ${e.localizedMessage ?: "กรุณาลองอีกครั้ง"}"
+            }
+        }
+    }
+
+    private suspend fun finalizeSignedInUser(
+        user: FirebaseUser,
+        isRegisterFlow: Boolean,
+        prefilledName: String?,
+        prefilledWeight: Float?,
+        prefilledHeight: Float?,
+        prefilledGoalMinutes: Int?
+    ) {
+        if (isRegisterFlow) {
+            val resolvedName = prefilledName?.takeIf { it.isNotBlank() }
+                ?: user.displayName?.takeIf { it.isNotBlank() }
+                ?: "นักกีฬา MOVE"
+            saveRegistrationAndSync(
+                uid = user.uid,
+                displayName = resolvedName,
+                email = user.email,
+                photoUrl = user.photoUrl?.toString(),
+                weightKg = prefilledWeight ?: 65f,
+                heightCm = prefilledHeight ?: 170f,
+                dailyGoalMinutes = prefilledGoalMinutes ?: 0
+            )
+            isCompletingInlineRegistration = false
+        } else if (activeResolutionUid != user.uid && _gateState.value !is AuthGateState.Authenticated) {
+            resolveAuthenticatedUser(
+                uid = user.uid,
+                googleName = user.displayName,
+                email = user.email,
+                photoUrl = user.photoUrl?.toString()
+            )
         }
     }
 

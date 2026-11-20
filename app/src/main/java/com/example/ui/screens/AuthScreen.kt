@@ -93,6 +93,7 @@ import com.example.ui.viewmodel.AuthModeTab
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -112,6 +113,14 @@ fun AuthScreen(
         prefilledHeight: Float?,
         prefilledGoalMinutes: Int?
     ) -> Unit,
+    onGoogleWebOAuthRequested: (
+        activity: Activity,
+        isRegisterFlow: Boolean,
+        prefilledName: String?,
+        prefilledWeight: Float?,
+        prefilledHeight: Float?,
+        prefilledGoalMinutes: Int?
+    ) -> Unit = { _, _, _, _, _, _ -> },
     onAuthError: (String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -126,6 +135,7 @@ fun AuthScreen(
     var registerHeight by remember { mutableStateOf("170") }
     var registerGoalMinutes by remember { mutableIntStateOf(0) }
     var attemptedSilentSignIn by remember { mutableStateOf(false) }
+    var silentSignInJob by remember { mutableStateOf<Job?>(null) }
     var isLaunchingSheet by remember { mutableStateOf(false) }
     val effectiveBusy = isBusy || isLaunchingSheet
 
@@ -149,11 +159,13 @@ fun AuthScreen(
                 val request = GetCredentialRequest.Builder()
                     .addCredentialOption(googleIdOption)
                     .build()
-                runCatching {
-                    val response = credentialManager.getCredential(activityContext, request)
-                    if (!isLaunchingSheet && !isBusy) {
-                        extractGoogleIdToken(response.credential)?.let { token ->
-                            onGoogleIdTokenReceived(token, false, null, null, null, null)
+                silentSignInJob = launch {
+                    runCatching {
+                        val response = credentialManager.getCredential(activityContext, request)
+                        if (!isLaunchingSheet && !isBusy) {
+                            extractGoogleIdToken(response.credential)?.let { token ->
+                                onGoogleIdTokenReceived(token, false, null, null, null, null)
+                            }
                         }
                     }
                 }
@@ -161,8 +173,39 @@ fun AuthScreen(
         }
     }
 
+    fun launchWebOAuthFallback(isRegister: Boolean) {
+        if (effectiveBusy) return
+        val activity = activityContext as? Activity
+        if (activity == null) {
+            onAuthError("ไม่พบ Activity สำหรับเปิดหน้าต่างเข้าสู่ระบบ Google")
+            return
+        }
+        silentSignInJob?.cancel()
+        onAuthError(null)
+        onGoogleWebOAuthRequested(
+            activity,
+            isRegister,
+            registerName.takeIf { isRegister && it.isNotBlank() },
+            if (isRegister) registerWeight.toFloatOrNull() else null,
+            if (isRegister) registerHeight.toFloatOrNull() else null,
+            if (isRegister) registerGoalMinutes else null
+        )
+    }
+
+    fun deliverCredentialToken(idToken: String, isRegister: Boolean) {
+        onGoogleIdTokenReceived(
+            idToken,
+            isRegister,
+            registerName.takeIf { isRegister && it.isNotBlank() },
+            if (isRegister) registerWeight.toFloatOrNull() else null,
+            if (isRegister) registerHeight.toFloatOrNull() else null,
+            if (isRegister) registerGoalMinutes else null
+        )
+    }
+
     fun launchInteractiveGoogleAuth(isRegister: Boolean) {
         if (effectiveBusy) return
+        silentSignInJob?.cancel()
         scope.launch {
             isLaunchingSheet = true
             onAuthError(null)
@@ -179,29 +222,48 @@ fun AuthScreen(
                 val response = credentialManager.getCredential(activityContext, request)
                 val idToken = extractGoogleIdToken(response.credential)
                 if (idToken != null) {
-                    onGoogleIdTokenReceived(
-                        idToken,
-                        isRegister,
-                        registerName.takeIf { isRegister && it.isNotBlank() },
-                        if (isRegister) registerWeight.toFloatOrNull() else null,
-                        if (isRegister) registerHeight.toFloatOrNull() else null,
-                        if (isRegister) registerGoalMinutes else null
-                    )
+                    deliverCredentialToken(idToken, isRegister)
                 } else {
                     onAuthError("ไม่พบโทเค็นจากบัญชี Google กรุณาลองใหม่อีกครั้ง")
                 }
             } catch (e: GetCredentialCancellationException) {
-                Log.w(AUTH_TAG, "Google Sign-In cancelled or dismissed: ${e.message}", e)
-                onAuthError(context.getString(R.string.error_sign_in_cancelled))
+                val rawMsg = (e.errorMessage?.toString() ?: e.message ?: "").trim()
+                Log.w(AUTH_TAG, "Google Sign-In cancelled or dismissed: $rawMsg", e)
+                val hint = if (rawMsg.isNotBlank() && !rawMsg.contains("cancelled by the user", ignoreCase = true)) {
+                    "ยกเลิกหรือไม่สามารถยืนยันบัญชี Google ($rawMsg) กรุณาลองเลือกบัญชีอีกครั้ง หรือใช้วิธีเข้าสู่ระบบผ่านเบราว์เซอร์ด้านล่าง"
+                } else {
+                    "การเลือกบัญชี Google ถูกยกเลิกหรือระบบปฏิเสธคำขอ หากเลือกบัญชีแล้วเด้งออก ให้กดปุ่ม \"เข้าสู่ระบบผ่านเบราว์เซอร์\" ด้านล่าง"
+                }
+                onAuthError(hint)
             } catch (e: NoCredentialException) {
-                Log.w(AUTH_TAG, "No Google credentials found", e)
-                onAuthError("ไม่พบบัญชี Google บนอุปกรณ์นี้ กรุณาเพิ่มบัญชี Google ในตั้งค่าเครื่อง")
+                Log.w(AUTH_TAG, "Primary Sign-In found no credential, retrying with GetGoogleIdOption", e)
+                try {
+                    val serverClientId = resolveDefaultWebClientId(context)
+                    val fallbackOption = GetGoogleIdOption.Builder()
+                        .setFilterByAuthorizedAccounts(false)
+                        .setServerClientId(serverClientId)
+                        .setAutoSelectEnabled(false)
+                        .build()
+                    val fallbackRequest = GetCredentialRequest.Builder()
+                        .addCredentialOption(fallbackOption)
+                        .build()
+                    val response = credentialManager.getCredential(activityContext, fallbackRequest)
+                    val idToken = extractGoogleIdToken(response.credential)
+                    if (idToken != null) {
+                        deliverCredentialToken(idToken, isRegister)
+                    } else {
+                        onAuthError("ไม่พบโทเค็นจากบัญชี Google กรุณาลองเข้าสู่ระบบผ่านเบราว์เซอร์")
+                    }
+                } catch (fallbackEx: Exception) {
+                    Log.w(AUTH_TAG, "Secondary GetGoogleIdOption failed", fallbackEx)
+                    onAuthError("ไม่พบบัญชี Google ที่พร้อมใช้งานจากระบบเครื่อง กรุณากดเข้าสู่ระบบผ่านเบราว์เซอร์ด้านล่าง")
+                }
             } catch (e: GetCredentialException) {
                 Log.w(AUTH_TAG, "Credential Manager error: ${e.type} - ${e.errorMessage}", e)
                 val detail = e.errorMessage?.toString()?.takeIf { it.isNotBlank() }
                     ?: e.localizedMessage
                     ?: e.type
-                onAuthError("ไม่สามารถเชื่อมต่อ Google Sign-In: $detail")
+                onAuthError("ไม่สามารถเชื่อมต่อ Google Sign-In ($detail) กรุณาลองเข้าสู่ระบบผ่านเบราว์เซอร์ด้านล่าง")
             } catch (e: Exception) {
                 Log.w(AUTH_TAG, "Unexpected auth error", e)
                 onAuthError("เกิดข้อผิดพลาดในการเข้าสู่ระบบ: ${e.localizedMessage ?: "กรุณาลองอีกครั้ง"}")
@@ -231,45 +293,45 @@ fun AuthScreen(
                 .fillMaxSize()
                 .widthIn(max = 520.dp)
                 .verticalScroll(scrollState)
-                .padding(horizontal = 22.dp, vertical = 20.dp),
+                .padding(horizontal = 20.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Hero Logo & Artwork
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.padding(top = 8.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(top = 4.dp)
             ) {
                 Surface(
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(18.dp),
                     color = Color.White.copy(alpha = 0.14f),
                     border = BorderStroke(1.5.dp, MintBright.copy(alpha = 0.5f)),
-                    modifier = Modifier.size(72.dp)
+                    modifier = Modifier.size(56.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.DirectionsRun,
                             contentDescription = "MOVE",
                             tint = MintBright,
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(32.dp)
                         )
                     }
                 }
                 Text(
                     text = "MOVE",
-                    style = MaterialTheme.typography.displayMedium,
+                    style = MaterialTheme.typography.headlineLarge,
                     color = Color.White,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = "Smart Sports & Activity Tracker",
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     color = MintBright
                 )
                 Text(
-                    text = "AI ตรวจจับท่าออกกำลังกาย นับครั้งอัตโนมัติ และซิงก์สถิติของคุณอย่างปลอดภัยบนคลาวด์",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = "AI ตรวจจับท่าออกกำลังกาย นับครั้งอัตโนมัติ และซิงก์สถิติอย่างปลอดภัยบนคลาวด์",
+                    style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = 0.84f),
                     textAlign = TextAlign.Center
                 )
@@ -277,14 +339,14 @@ fun AuthScreen(
 
             // Main Auth Card (Login / Register tabs)
             Card(
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(26.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier.padding(22.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     SingleChoiceSegmentedButtonRow(
                         modifier = Modifier
@@ -325,22 +387,41 @@ fun AuthScreen(
                                 .fillMaxWidth()
                                 .testTag("auth_error_banner")
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ErrorOutline,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Text(
-                                    text = errorMessage,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.Top,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.ErrorOutline,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Text(
+                                        text = errorMessage,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = { launchWebOAuthFallback(isRegister = selectedTab == AuthModeTab.REGISTER) },
+                                    enabled = !effectiveBusy,
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.45f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("google_web_oauth_banner_button")
+                                ) {
+                                    Text(
+                                        text = "เข้าสู่ระบบด้วย Google ผ่านเบราว์เซอร์",
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
                     }
@@ -350,15 +431,15 @@ fun AuthScreen(
                         label = "auth_tab_content"
                     ) { tab ->
                         if (tab == AuthModeTab.LOGIN) {
-                            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text(
                                     text = "ยินดีต้อนรับกลับมา!",
-                                    style = MaterialTheme.typography.headlineMedium,
+                                    style = MaterialTheme.typography.headlineSmall,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "เข้าสู่ระบบเพื่อเรียกคืนประวัติการออกกำลังกาย Streak เลเวล XP และโปรไฟล์ร่างกายของคุณจากคลาวด์",
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    text = "เข้าสู่ระบบเพื่อเรียกคืนประวัติการออกกำลังกาย Streak เลเวล XP และโปรไฟล์ของคุณจากคลาวด์",
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
 
@@ -368,8 +449,8 @@ fun AuthScreen(
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(140.dp)
-                                        .clip(RoundedCornerShape(18.dp))
+                                        .height(112.dp)
+                                        .clip(RoundedCornerShape(16.dp))
                                 )
 
                                 AuthFeatureHighlights()
@@ -381,7 +462,7 @@ fun AuthScreen(
                                     colors = ButtonDefaults.buttonColors(containerColor = ForestGreen),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(54.dp)
+                                        .height(52.dp)
                                         .testTag("google_sign_in_button")
                                 ) {
                                     if (effectiveBusy) {
@@ -405,6 +486,20 @@ fun AuthScreen(
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
+                                }
+
+                                OutlinedButton(
+                                    onClick = { launchWebOAuthFallback(isRegister = false) },
+                                    enabled = !effectiveBusy,
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("google_web_oauth_login_button")
+                                ) {
+                                    Text(
+                                        text = "เลือกบัญชีแล้วเข้าไม่ได้? ลองผ่านเบราว์เซอร์",
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
                                 }
 
                                 Row(
@@ -538,6 +633,20 @@ fun AuthScreen(
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
+                                }
+
+                                OutlinedButton(
+                                    onClick = { launchWebOAuthFallback(isRegister = true) },
+                                    enabled = !effectiveBusy,
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("google_web_oauth_register_button")
+                                ) {
+                                    Text(
+                                        text = "เลือกบัญชีแล้วเข้าไม่ได้? ลองผ่านเบราว์เซอร์",
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
                                 }
 
                                 Row(

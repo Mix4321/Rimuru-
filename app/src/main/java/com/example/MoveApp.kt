@@ -227,6 +227,7 @@ fun AppNavigation() {
                     errorMessage = authErrorMessage,
                     onSelectTab = authViewModel::selectModeTab,
                     onGoogleIdTokenReceived = authViewModel::signInWithGoogleIdToken,
+                    onGoogleWebOAuthRequested = authViewModel::signInWithGoogleWebOAuth,
                     onAuthError = authViewModel::setErrorMessage
                 )
             }
