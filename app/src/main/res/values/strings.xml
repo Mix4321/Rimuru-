@@ -6,6 +6,7 @@
     <string name="goal_badge_desc">เหรียญความสำเร็จเป้าหมายรายวัน</string>
     <string name="nav_dashboard">หน้าหลัก</string>
     <string name="nav_sports">เลือกกีฬา</string>
+    <string name="nav_places">ใกล้ฉัน</string>
     <string name="nav_history">ประวัติ</string>
     <string name="nav_settings">ตั้งค่า</string>
     <string name="error_sign_in_cancelled">ยกเลิกการเข้าสู่ระบบ กรุณาเลือกบัญชีเพื่อดำเนินการต่อ</string>

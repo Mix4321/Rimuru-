@@ -31,10 +31,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
 import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SportsHandball
 import androidx.compose.material.icons.rounded.Dashboard
+import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SportsHandball
@@ -100,6 +102,7 @@ import com.example.ui.screens.AccountRegistrationScreen
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.HistoryScreen
+import com.example.ui.screens.NearbySpotsScreen
 import com.example.ui.screens.ProgressionBadgesScreen
 import com.example.ui.screens.RecoveryAndPlanScreen
 import com.example.ui.screens.SettingsScreen
@@ -114,6 +117,7 @@ import com.example.ui.viewmodel.AuthGateState
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.DashboardData
 import com.example.ui.viewmodel.DashboardViewModel
+import com.example.ui.viewmodel.NearbySpotsViewModel
 import com.example.ui.viewmodel.SettingsViewModel
 import com.example.ui.viewmodel.WorkoutTimerStyle
 import com.example.ui.viewmodel.WorkoutViewModel
@@ -124,6 +128,9 @@ data object DashboardRoute
 
 @Serializable
 data object SportsRoute
+
+@Serializable
+data object NearbySpotsRoute
 
 @Serializable
 data object HistoryRoute
@@ -175,6 +182,13 @@ private enum class TopLevelTab(
         unselectedIcon = Icons.Outlined.SportsHandball,
         routeObj = SportsRoute,
         tag = "nav_tab_sports"
+    ),
+    PLACES(
+        labelRes = R.string.nav_places,
+        selectedIcon = Icons.Rounded.Explore,
+        unselectedIcon = Icons.Outlined.Explore,
+        routeObj = NearbySpotsRoute,
+        tag = "nav_tab_places"
     ),
     HISTORY(
         labelRes = R.string.nav_history,
@@ -373,6 +387,16 @@ private fun AuthenticatedMoveShell(
         }
     )
 
+    val nearbySpotsViewModel: NearbySpotsViewModel = viewModel(
+        key = "nearby_${authUser.uid}",
+        factory = viewModelFactory {
+            initializer {
+                val app = checkNotNull(this[APPLICATION_KEY])
+                NearbySpotsViewModel(application = app)
+            }
+        }
+    )
+
     val appSettings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val settingsMessage by settingsViewModel.statusMessage.collectAsStateWithLifecycle()
 
@@ -431,6 +455,7 @@ private fun AuthenticatedMoveShell(
                                 when (tab) {
                                     TopLevelTab.DASHBOARD -> it.hasRoute<DashboardRoute>()
                                     TopLevelTab.SPORTS -> it.hasRoute<SportsRoute>()
+                                    TopLevelTab.PLACES -> it.hasRoute<NearbySpotsRoute>()
                                     TopLevelTab.HISTORY -> it.hasRoute<HistoryRoute>()
                                     TopLevelTab.SETTINGS -> it.hasRoute<SettingsRoute>()
                                 }
@@ -498,6 +523,7 @@ private fun AuthenticatedMoveShell(
                                 when (tab) {
                                     TopLevelTab.DASHBOARD -> it.hasRoute<DashboardRoute>()
                                     TopLevelTab.SPORTS -> it.hasRoute<SportsRoute>()
+                                    TopLevelTab.PLACES -> it.hasRoute<NearbySpotsRoute>()
                                     TopLevelTab.HISTORY -> it.hasRoute<HistoryRoute>()
                                     TopLevelTab.SETTINGS -> it.hasRoute<SettingsRoute>()
                                 }
@@ -595,6 +621,9 @@ private fun AuthenticatedMoveShell(
                                     },
                                     onOpenProgressionBadgesPage = {
                                         navController.navigate(ProgressionBadgesRoute)
+                                    },
+                                    onOpenNearbySpots = {
+                                        navigateTopLevel(TopLevelTab.PLACES)
                                     }
                                 )
                             }
@@ -683,6 +712,21 @@ private fun AuthenticatedMoveShell(
                                             popUpTo<StretchingRoute> { inclusive = true }
                                         }
                                     }
+                                }
+                            )
+                        }
+
+                        composable<NearbySpotsRoute> {
+                            NearbySpotsScreen(
+                                viewModel = nearbySpotsViewModel,
+                                onStartWorkoutAtSpot = { sport ->
+                                    navController.navigate(
+                                        WorkoutRoute(
+                                            sportName = sport.name,
+                                            trackingModeName = sport.defaultTrackingMode.name,
+                                            resumeDraft = false
+                                        )
+                                    )
                                 }
                             )
                         }

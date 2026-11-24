@@ -39,6 +39,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Route
@@ -113,6 +114,7 @@ fun DashboardScreen(
     onViewHistory: () -> Unit,
     onOpenRecoveryPlanPage: () -> Unit = {},
     onOpenProgressionBadgesPage: () -> Unit = {},
+    onOpenNearbySpots: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -538,6 +540,64 @@ fun DashboardScreen(
                                 .weight(1f)
                                 .testTag("topic_history_card")
                         )
+                    }
+
+                    Card(
+                        shape = RoundedCornerShape(22.dp),
+                        colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(22.dp))
+                            .bounceClickable(onClick = onOpenNearbySpots)
+                            .testTag("topic_nearby_spots_card")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    Brush.horizontalGradient(
+                                        colors = listOf(ForestGreenDeep, ForestGreen)
+                                    )
+                                )
+                                .auroraGlowBackdrop(primaryGlow = MintBright, secondaryGlow = EmeraldVibrant)
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(MintBright.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Navigation,
+                                    contentDescription = null,
+                                    tint = MintBright,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "แหล่งออกกำลังกายใกล้ฉัน & นำทาง",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "รวบรวมสวน ฟิตเนส สนามกีฬาใกล้สุด พร้อมเส้นทางนำทางจริง",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MintBright
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = MintBright
+                            )
+                        }
                     }
                 }
             }
