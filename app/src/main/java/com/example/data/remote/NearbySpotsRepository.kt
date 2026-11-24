@@ -4,7 +4,9 @@ import com.example.data.model.SportType
 import com.example.ui.components.haversineMeters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -111,72 +113,180 @@ class NearbySpotsRepository {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    private data class CachedSpotsEntry(
+        val lat: Double,
+        val lng: Double,
+        val radiusMeters: Int,
+        val timestampMs: Long,
+        val spots: List<WorkoutSpot>
+    )
+
+    private val nearbyCacheLock = Any()
+    private val nearbySpotsCache = LinkedHashMap<String, CachedSpotsEntry>(16, 0.75f, true)
+
+    private fun findCachedSpots(lat: Double, lng: Double, radiusMeters: Int): List<WorkoutSpot>? {
+        val now = System.currentTimeMillis()
+        synchronized(nearbyCacheLock) {
+            val iterator = nearbySpotsCache.entries.iterator()
+            var bestMatch: CachedSpotsEntry? = null
+            var bestDist = Double.MAX_VALUE
+            while (iterator.hasNext()) {
+                val entry = iterator.next().value
+                if (now - entry.timestampMs > CACHE_TTL_MS) {
+                    iterator.remove()
+                    continue
+                }
+                if (entry.radiusMeters == radiusMeters) {
+                    val dist = haversineMeters(lat, lng, entry.lat, entry.lng)
+                    if (dist <= CACHE_MATCH_DISTANCE_METERS && dist < bestDist) {
+                        bestDist = dist
+                        bestMatch = entry
+                    }
+                }
+            }
+            return bestMatch?.spots?.map { spot ->
+                spot.copy(
+                    distanceMeters = haversineMeters(lat, lng, spot.lat, spot.lng)
+                        .roundToInt()
+                        .coerceAtLeast(1)
+                )
+            }?.sortedBy { it.distanceMeters }
+        }
+    }
+
+    private fun storeCachedSpots(lat: Double, lng: Double, radiusMeters: Int, spots: List<WorkoutSpot>) {
+        if (spots.isEmpty()) return
+        val key = "${(lat * 100).roundToInt()}_${(lng * 100).roundToInt()}_$radiusMeters"
+        synchronized(nearbyCacheLock) {
+            if (nearbySpotsCache.size >= 20) {
+                nearbySpotsCache.keys.firstOrNull()?.let { nearbySpotsCache.remove(it) }
+            }
+            nearbySpotsCache[key] = CachedSpotsEntry(
+                lat = lat,
+                lng = lng,
+                radiusMeters = radiusMeters,
+                timestampMs = System.currentTimeMillis(),
+                spots = spots
+            )
+        }
+    }
+
     /**
-     * Fetches real exercise spots from OpenStreetMap Overpass API with automatic
-     * mirror failover and Komoot Photon + Nominatim backup aggregation so spots load reliably
-     * even if Overpass is rate-limited or busy.
+     * Fetches real exercise spots from OpenStreetMap Overpass mirrors and Komoot Photon in parallel,
+     * emitting progressive partial results as soon as the fastest source finishes (typically ~1s)
+     * and racing Overpass mirrors concurrently to eliminate long sequential waits.
      */
     suspend fun fetchNearbySpots(
         userLat: Double,
         userLng: Double,
-        radiusMeters: Int = UNLIMITED_RADIUS_METERS
+        radiusMeters: Int = UNLIMITED_RADIUS_METERS,
+        forceRefresh: Boolean = false,
+        onPartialSpots: (suspend (List<WorkoutSpot>) -> Unit)? = null
     ): Result<List<WorkoutSpot>> = withContext(Dispatchers.IO) {
         runCatching {
-            val collectedByKey = LinkedHashMap<String, WorkoutSpot>()
-            var overpassError: Throwable? = null
-
-            if (radiusMeters > 0) {
-                val clamped = radiusMeters.coerceIn(500, MAX_QUERY_RADIUS_METERS)
-                try {
-                    val query = buildOverpassQuery(userLat, userLng, clamped)
-                    val raw = executeOverpass(query)
-                    parseOverpassSpots(rawJson = raw, originLat = userLat, originLng = userLng)
-                        .filter { it.distanceMeters <= clamped + 500 }
-                        .forEach { spot ->
-                            collectedByKey.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
-                        }
-                } catch (t: Throwable) {
-                    overpassError = t
+            if (!forceRefresh) {
+                findCachedSpots(userLat, userLng, radiusMeters)?.let { cached ->
+                    return@runCatching cached
                 }
+            }
+
+            val collectedByKey = LinkedHashMap<String, WorkoutSpot>()
+            val primaryRadius = if (radiusMeters > 0) {
+                radiusMeters.coerceIn(500, MAX_QUERY_RADIUS_METERS)
             } else {
-                // Progressive unlimited search: expand outward until we collect nearby spots
-                val rings = listOf(8_000, 25_000, 75_000, 120_000)
-                for ((idx, ringRadius) in rings.withIndex()) {
-                    try {
-                        val query = buildOverpassQuery(userLat, userLng, ringRadius)
-                        val raw = executeOverpass(query)
-                        val parsed = parseOverpassSpots(rawJson = raw, originLat = userLat, originLng = userLng)
-                        for (spot in parsed) {
-                            collectedByKey.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
-                        }
-                        val targetCount = when (idx) {
-                            0 -> 45
-                            1 -> 30
-                            2 -> 15
-                            else -> 5
-                        }
-                        if (collectedByKey.size >= targetCount) break
-                    } catch (t: Throwable) {
-                        overpassError = t
+                10_000
+            }
+            val maxAllowedDist = if (radiusMeters > 0) primaryRadius + 500 else MAX_QUERY_RADIUS_METERS
+
+            var overpassError: Throwable? = null
+            var photonError: Throwable? = null
+
+            coroutineScope {
+                // Source 1: Fast parallel Photon POI batch (typically completes in 0.5-1.5s)
+                val photonDeferred = async {
+                    runCatching {
+                        withTimeoutOrNull(4_800L) {
+                            fetchNearbyViaPhotonFast(userLat, userLng, radiusMeters)
+                        } ?: emptyList()
+                    }
+                }
+
+                // Source 2: Fast concurrent-mirror Overpass query on primary radius
+                val overpassDeferred = async {
+                    runCatching {
+                        val query = buildOverpassQuery(userLat, userLng, primaryRadius)
+                        val raw = executeOverpassFast(query, timeoutMs = 7_500L)
+                        parseOverpassSpots(rawJson = raw, originLat = userLat, originLng = userLng)
+                            .filter { it.distanceMeters <= maxAllowedDist }
+                    }
+                }
+
+                // Emit Photon results immediately so UI populates without waiting for Overpass
+                val photonResult = photonDeferred.await()
+                val photonSpots = photonResult.getOrNull().orEmpty()
+                if (photonResult.isFailure) {
+                    photonError = photonResult.exceptionOrNull()
+                }
+                if (photonSpots.isNotEmpty()) {
+                    for (spot in photonSpots) {
+                        collectedByKey.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+                    }
+                    onPartialSpots?.invoke(collectedByKey.values.sortedBy { it.distanceMeters })
+                }
+
+                // Merge Overpass rich venue details as soon as the fastest mirror responds
+                val overpassResult = overpassDeferred.await()
+                val overpassSpots = overpassResult.getOrNull().orEmpty()
+                if (overpassResult.isFailure) {
+                    overpassError = overpassResult.exceptionOrNull()
+                }
+                for (spot in overpassSpots) {
+                    // Prefer Overpass entry because it carries openingHours, phone, surface, indoor, lighting
+                    val key = dedupKeyFor(spot.name, spot.lat, spot.lng)
+                    collectedByKey[key] = spot
+                }
+            }
+
+            // Single fast wide fallback only if area is sparse (< 10 spots)
+            if (collectedByKey.size < 10) {
+                if (onPartialSpots != null && collectedByKey.isNotEmpty()) {
+                    onPartialSpots.invoke(collectedByKey.values.sortedBy { it.distanceMeters })
+                }
+                coroutineScope {
+                    val wideOverpassJob = async<List<WorkoutSpot>> {
+                        if (radiusMeters != UNLIMITED_RADIUS_METERS) return@async emptyList()
+                        runCatching {
+                            val wideQuery = buildOverpassQuery(userLat, userLng, 35_000)
+                            val raw = executeOverpassFast(wideQuery, timeoutMs = 5_500L)
+                            parseOverpassSpots(rawJson = raw, originLat = userLat, originLng = userLng)
+                        }.getOrDefault(emptyList())
+                    }
+
+                    val nomJob = async<List<WorkoutSpot>> {
+                        runCatching {
+                            withTimeoutOrNull(4_000L) {
+                                fetchNominatimParkFallback(userLat, userLng, maxAllowedDist)
+                            } ?: emptyList()
+                        }.getOrDefault(emptyList())
+                    }
+
+                    wideOverpassJob.await().forEach { spot ->
+                        collectedByKey.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+                    }
+                    nomJob.await().forEach { spot ->
+                        collectedByKey.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
                     }
                 }
             }
 
-            // Supplement via Photon & Nominatim so every nearby venue category is richly covered
-            if (collectedByKey.size < 25) {
-                val backupResult = runCatching {
-                    fetchNearbyViaPhotonAndNominatim(userLat, userLng, radiusMeters)
-                }
-                backupResult.getOrNull()?.forEach { spot ->
-                    collectedByKey.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
-                }
-                if (collectedByKey.isEmpty()) {
-                    throw (overpassError ?: backupResult.exceptionOrNull()
-                        ?: IllegalStateException("ไม่สามารถรวบรวมสถานที่ใกล้คุณได้"))
-                }
+            if (collectedByKey.isEmpty()) {
+                throw (overpassError ?: photonError
+                    ?: IllegalStateException("ไม่สามารถรวบรวมสถานที่ใกล้คุณได้"))
             }
 
-            collectedByKey.values.sortedBy { it.distanceMeters }
+            val finalSorted = collectedByKey.values.sortedBy { it.distanceMeters }
+            storeCachedSpots(userLat, userLng, radiusMeters, finalSorted)
+            finalSorted
         }
     }
 
@@ -204,7 +314,7 @@ class NearbySpotsRepository {
                 val photonDeferred = async {
                     runCatching {
                         val url = buildPhotonSearchUrl(clean, originLat, originLng, limit = 15)
-                        val raw = getUrl(url)
+                        val raw = getUrl(url, connectMs = 3_500, readMs = 4_500)
                         parsePhotonWorkoutSpots(
                             rawJson = raw,
                             originLat = refLat,
@@ -216,7 +326,7 @@ class NearbySpotsRepository {
 
                 val nominatimDeferred = async {
                     runCatching {
-                        val raw = getUrl(buildNominatimSearchUrl(clean, originLat, originLng))
+                        val raw = getUrl(buildNominatimSearchUrl(clean, originLat, originLng), connectMs = 3_500, readMs = 5_000)
                         parseNominatimResults(raw)
                     }
                 }
@@ -224,7 +334,7 @@ class NearbySpotsRepository {
                 val overpassDeferred = async {
                     runCatching {
                         val opQuery = buildOverpassKeywordQuery(clean, refLat, refLng, radiusMeters = 120_000)
-                        val raw = executeOverpass(opQuery)
+                        val raw = executeOverpassFast(opQuery, timeoutMs = 6_000L)
                         parseOverpassSpots(rawJson = raw, originLat = refLat, originLng = refLng)
                     }
                 }
@@ -367,7 +477,7 @@ class NearbySpotsRepository {
         return "https://photon.komoot.io/api/?q=$encoded&limit=$limit$bias"
     }
 
-    private suspend fun fetchNearbyViaPhotonAndNominatim(
+    private suspend fun fetchNearbyViaPhotonFast(
         lat: Double,
         lng: Double,
         radiusMeters: Int
@@ -376,14 +486,16 @@ class NearbySpotsRepository {
         val queries = listOf(
             "park",
             "fitness gym",
-            "stadium sport",
-            "badminton swimming",
-            "yoga muay thai boxing"
+            "stadium badminton swimming"
         )
         val deferreds = queries.map { q ->
             async {
                 runCatching {
-                    val raw = getUrl(buildPhotonSearchUrl(q, lat, lng, limit = 20))
+                    val raw = getUrl(
+                        urlString = buildPhotonSearchUrl(q, lat, lng, limit = 20),
+                        connectMs = 3_000,
+                        readMs = 4_000
+                    )
                     parsePhotonWorkoutSpots(
                         rawJson = raw,
                         originLat = lat,
@@ -409,55 +521,48 @@ class NearbySpotsRepository {
             }
         }
 
-        if (collected.size < 4) {
-            val nomFallback = runCatching {
-                val raw = getUrl(buildNominatimSearchUrl("park", lat, lng))
-                parseNominatimResults(raw).mapNotNull { sug ->
-                    val dist = haversineMeters(lat, lng, sug.lat, sug.lng).roundToInt().coerceAtLeast(1)
-                    if (dist > maxDistance) return@mapNotNull null
-                    val cat = sug.category ?: NearbySpotCategory.PARK_RUN
-                    WorkoutSpot(
-                        id = "nom_${dedupKeyFor(sug.shortName, sug.lat, sug.lng).hashCode()}",
-                        name = sug.shortName,
-                        category = cat,
-                        categoryDetailThai = sug.detailLabel ?: cat.thaiLabel,
-                        lat = sug.lat,
-                        lng = sug.lng,
-                        distanceMeters = dist,
-                        addressSummary = sug.displayName.substringAfter(",", "").trim().ifBlank { null },
-                        suggestedSport = inferSportFromCategory(cat, sug.shortName)
-                    )
-                }
-            }
-            if (nomFallback.isSuccess) {
-                anySuccess = true
-                nomFallback.getOrNull()?.forEach { spot ->
-                    collected.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
-                }
-            } else if (lastErr == null) {
-                lastErr = nomFallback.exceptionOrNull()
-            }
-        }
-
         if (!anySuccess && lastErr != null) {
             throw lastErr
         }
         collected.values.sortedBy { it.distanceMeters }
     }
 
+    private fun fetchNominatimParkFallback(
+        lat: Double,
+        lng: Double,
+        maxDistance: Int
+    ): List<WorkoutSpot> {
+        val raw = getUrl(buildNominatimSearchUrl("park", lat, lng), connectMs = 3_000, readMs = 4_000)
+        return parseNominatimResults(raw).mapNotNull { sug ->
+            val dist = haversineMeters(lat, lng, sug.lat, sug.lng).roundToInt().coerceAtLeast(1)
+            if (dist > maxDistance) return@mapNotNull null
+            val cat = sug.category ?: NearbySpotCategory.PARK_RUN
+            WorkoutSpot(
+                id = "nom_${dedupKeyFor(sug.shortName, sug.lat, sug.lng).hashCode()}",
+                name = sug.shortName,
+                category = cat,
+                categoryDetailThai = sug.detailLabel ?: cat.thaiLabel,
+                lat = sug.lat,
+                lng = sug.lng,
+                distanceMeters = dist,
+                addressSummary = sug.displayName.substringAfter(",", "").trim().ifBlank { null },
+                suggestedSport = inferSportFromCategory(cat, sug.shortName)
+            )
+        }
+    }
+
     internal fun buildOverpassQuery(lat: Double, lng: Double, radiusMeters: Int): String {
         val latStr = String.format(Locale.US, "%.6f", lat)
         val lngStr = String.format(Locale.US, "%.6f", lng)
         return """
-            [out:json][timeout:22];
+            [out:json][timeout:8];
             (
               nwr["leisure"~"^(fitness_centre|fitness_station|sports_centre|sports_hall|stadium|track|swimming_pool|pitch|recreation_ground|ice_rink|golf_course|bowling_alley|dance)$"]["access"!="private"](around:$radiusMeters,$latStr,$lngStr);
               nwr["amenity"~"^(gym|dojo|yoga_studio)$"](around:$radiusMeters,$latStr,$lngStr);
               nwr["leisure"~"^(park|nature_reserve)$"]["name"](around:$radiusMeters,$latStr,$lngStr);
               nwr["club"="sport"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["sport"]["access"!="private"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["sport"]["name"]["access"!="private"](around:$radiusMeters,$latStr,$lngStr);
               way["highway"="cycleway"]["name"](around:$radiusMeters,$latStr,$lngStr);
-              relation["route"~"^(running|bicycle|fitness_trail)$"](around:$radiusMeters,$latStr,$lngStr);
             );
             out center 350;
         """.trimIndent()
@@ -473,7 +578,7 @@ class NearbySpotsRepository {
         val latStr = String.format(Locale.US, "%.6f", lat)
         val lngStr = String.format(Locale.US, "%.6f", lng)
         return """
-            [out:json][timeout:18];
+            [out:json][timeout:8];
             (
               nwr["name"~"$safeRegex",i]["leisure"~"park|fitness_centre|fitness_station|sports_centre|sports_hall|stadium|track|swimming_pool|pitch|recreation_ground|golf_course|dance"](around:$radiusMeters,$latStr,$lngStr);
               nwr["name:th"~"$safeRegex",i]["leisure"~"park|fitness_centre|fitness_station|sports_centre|sports_hall|stadium|track|swimming_pool|pitch|recreation_ground|golf_course|dance"](around:$radiusMeters,$latStr,$lngStr);
@@ -486,33 +591,55 @@ class NearbySpotsRepository {
         """.trimIndent()
     }
 
-    private fun executeOverpass(query: String): String {
+    private suspend fun executeOverpassFast(query: String, timeoutMs: Long = 7_500L): String = coroutineScope {
         val endpoints = listOf(
             "https://overpass-api.de/api/interpreter",
-            "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
             "https://overpass.private.coffee/api/interpreter",
-            "https://overpass.kumi.systems/api/interpreter"
+            "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
         )
-        var lastError: Throwable? = null
         val encoded = "data=" + URLEncoder.encode(query, "UTF-8")
-        for (endpoint in endpoints) {
-            try {
-                val body = postForm(endpoint, encoded).trim()
-                if (!body.startsWith("{")) {
-                    throw IllegalStateException("รูปแบบข้อมูลจากแผนที่ไม่ถูกต้อง")
+        val channel = Channel<Result<String>>(endpoints.size)
+        val jobs = endpoints.map { endpoint ->
+            launch(Dispatchers.IO) {
+                val res = runCatching {
+                    val body = postForm(endpoint, encoded, connectMs = 3_500, readMs = 6_500).trim()
+                    validateOverpassResponse(body)
                 }
-                val root = json.parseToJsonElement(body).jsonObject
-                val elements = root["elements"]?.jsonArray
-                val remark = root["remark"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                if (elements.isNullOrEmpty() && remark.contains("error", ignoreCase = true)) {
-                    throw IllegalStateException(remark)
-                }
-                return body
-            } catch (t: Throwable) {
-                lastError = t
+                channel.trySend(res)
             }
         }
-        throw (lastError ?: IllegalStateException("ไม่สามารถดึงข้อมูลสถานที่ได้"))
+        var lastError: Throwable? = null
+        try {
+            val winner = withTimeoutOrNull(timeoutMs) {
+                repeat(endpoints.size) {
+                    val res = channel.receive()
+                    if (res.isSuccess) {
+                        return@withTimeoutOrNull res.getOrThrow()
+                    } else {
+                        lastError = res.exceptionOrNull()
+                    }
+                }
+                null
+            }
+            if (winner != null) return@coroutineScope winner
+            throw (lastError ?: IllegalStateException("ไม่สามารถดึงข้อมูลสถานที่ได้ภายในเวลาที่กำหนด"))
+        } finally {
+            jobs.forEach { it.cancel() }
+            channel.close()
+        }
+    }
+
+    private fun validateOverpassResponse(body: String): String {
+        if (!body.startsWith("{")) {
+            throw IllegalStateException("รูปแบบข้อมูลจากแผนที่ไม่ถูกต้อง")
+        }
+        val root = json.parseToJsonElement(body).jsonObject
+        val elements = root["elements"]?.jsonArray
+        val remark = root["remark"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        if (elements.isNullOrEmpty() && remark.contains("error", ignoreCase = true)) {
+            throw IllegalStateException(remark)
+        }
+        return body
     }
 
     internal fun parseOverpassSpots(
@@ -1103,8 +1230,8 @@ class NearbySpotsRepository {
 
     private fun getUrl(
         urlString: String,
-        connectMs: Int = 9_000,
-        readMs: Int = 11_000
+        connectMs: Int = 5_000,
+        readMs: Int = 6_500
     ): String {
         val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
@@ -1116,12 +1243,17 @@ class NearbySpotsRepository {
         return readHttpResponse(conn)
     }
 
-    private fun postForm(urlString: String, formBody: String): String {
+    private fun postForm(
+        urlString: String,
+        formBody: String,
+        connectMs: Int = 4_000,
+        readMs: Int = 6_500
+    ): String {
         val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             doOutput = true
-            connectTimeout = 12_000
-            readTimeout = 20_000
+            connectTimeout = connectMs
+            readTimeout = readMs
             setRequestProperty("User-Agent", "MoveActivityTracker/1.0 (Android)")
             setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
             setRequestProperty("Accept", "application/json")
@@ -1152,6 +1284,8 @@ class NearbySpotsRepository {
     companion object {
         const val UNLIMITED_RADIUS_METERS = 0
         private const val MAX_QUERY_RADIUS_METERS = 150_000
+        private const val CACHE_TTL_MS = 10 * 60 * 1000L
+        private const val CACHE_MATCH_DISTANCE_METERS = 650.0
         const val DEFAULT_THAILAND_LAT = 13.7563
         const val DEFAULT_THAILAND_LNG = 100.5018
 

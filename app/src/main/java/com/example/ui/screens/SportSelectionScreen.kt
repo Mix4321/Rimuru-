@@ -61,11 +61,12 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.SportType
 import com.example.data.model.StretchingCatalog
 import com.example.data.model.TrackingMode
+import com.example.ui.components.NeonPulseButton
 import com.example.ui.components.StaggeredEntrance
 import com.example.ui.components.bounceClickable
-import com.example.ui.components.shimmerSweepEffect
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
+import com.example.ui.theme.ObsidianBlack
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -428,39 +429,32 @@ private fun SportReadySheetContent(
             }
         }
 
-        Button(
+        NeonPulseButton(
+            text = "ยืดกล้ามเนื้อก่อนเริ่ม (แนะนำ)",
             onClick = { onStretchClicked(selectedMode) },
-            shape = RoundedCornerShape(18.dp),
+            leadingContent = {
+                Icon(Icons.Rounded.AccessibilityNew, contentDescription = null, tint = ObsidianBlack)
+            },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(54.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .shimmerSweepEffect(shimmerAlpha = 0.16f, durationMillis = 2800)
                 .testTag("start_stretching_button")
-        ) {
-            Icon(Icons.Rounded.AccessibilityNew, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "ยืดกล้ามเนื้อก่อนเริ่ม (แนะนำ)",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-        }
+        )
 
         OutlinedButton(
             onClick = { onStartClicked(selectedMode) },
             shape = RoundedCornerShape(18.dp),
+            border = BorderStroke(1.5.dp, EmeraldVibrant.copy(alpha = 0.7f)),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(50.dp)
+                .height(52.dp)
                 .testTag("confirm_start_workout_button")
         ) {
-            Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+            Icon(Icons.Rounded.PlayArrow, contentDescription = null, tint = EmeraldVibrant)
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = "ข้ามไปเริ่มออกกำลังกายเลย",
                 style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.Bold
             )
         }
         Spacer(modifier = Modifier.height(14.dp))

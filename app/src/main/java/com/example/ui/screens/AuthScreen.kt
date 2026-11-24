@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -67,6 +68,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -91,6 +93,7 @@ import com.example.ui.theme.ForestGreen
 import com.example.ui.theme.ForestGreenDeep
 import com.example.ui.theme.ForestGreenMedium
 import com.example.ui.theme.MintBright
+import com.example.ui.theme.ObsidianBlack
 import com.example.ui.viewmodel.AuthModeTab
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -467,21 +470,29 @@ fun AuthScreen(
 
                                 AuthFeatureHighlights()
 
+                                val loginBtnShape = RoundedCornerShape(18.dp)
                                 Button(
                                     onClick = { launchInteractiveGoogleAuth(isRegister = false) },
                                     enabled = !effectiveBusy,
-                                    shape = RoundedCornerShape(18.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = ForestGreen),
+                                    shape = loginBtnShape,
+                                    border = BorderStroke(1.2.dp, Color.White.copy(alpha = 0.45f)),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color.Transparent,
+                                        contentColor = ObsidianBlack
+                                    ),
+                                    contentPadding = PaddingValues(0.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(52.dp)
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .shimmerSweepEffect(enabled = !effectiveBusy, shimmerAlpha = 0.16f)
+                                        .height(56.dp)
+                                        .shadow(12.dp, loginBtnShape, ambientColor = MintBright, spotColor = EmeraldVibrant)
+                                        .clip(loginBtnShape)
+                                        .background(Brush.horizontalGradient(listOf(EmeraldVibrant, MintBright)))
+                                        .shimmerSweepEffect(enabled = !effectiveBusy, shimmerAlpha = 0.22f)
                                         .testTag("google_sign_in_button")
                                 ) {
                                     if (effectiveBusy) {
                                         CircularProgressIndicator(
-                                            color = Color.White,
+                                            color = ObsidianBlack,
                                             strokeWidth = 2.dp,
                                             modifier = Modifier.size(20.dp)
                                         )
@@ -489,15 +500,17 @@ fun AuthScreen(
                                         Text(
                                             text = "กำลังเข้าสู่ระบบ...",
                                             style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = ObsidianBlack
                                         )
                                     } else {
-                                        Icon(Icons.Rounded.Login, contentDescription = null)
+                                        Icon(Icons.Rounded.Login, contentDescription = null, tint = ObsidianBlack)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             text = "เข้าสู่ระบบด้วย Google",
                                             style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = ObsidianBlack
                                         )
                                     }
                                 }
@@ -616,21 +629,29 @@ fun AuthScreen(
                                     }
                                 }
 
+                                val regBtnShape = RoundedCornerShape(18.dp)
                                 Button(
                                     onClick = { launchInteractiveGoogleAuth(isRegister = true) },
                                     enabled = !effectiveBusy,
-                                    shape = RoundedCornerShape(18.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldVibrant),
+                                    shape = regBtnShape,
+                                    border = BorderStroke(1.2.dp, Color.White.copy(alpha = 0.45f)),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color.Transparent,
+                                        contentColor = ObsidianBlack
+                                    ),
+                                    contentPadding = PaddingValues(0.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(54.dp)
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .shimmerSweepEffect(enabled = !effectiveBusy, shimmerAlpha = 0.16f)
+                                        .height(56.dp)
+                                        .shadow(12.dp, regBtnShape, ambientColor = MintBright, spotColor = EmeraldVibrant)
+                                        .clip(regBtnShape)
+                                        .background(Brush.horizontalGradient(listOf(EmeraldVibrant, MintBright)))
+                                        .shimmerSweepEffect(enabled = !effectiveBusy, shimmerAlpha = 0.22f)
                                         .testTag("google_register_button")
                                 ) {
                                     if (effectiveBusy) {
                                         CircularProgressIndicator(
-                                            color = Color.White,
+                                            color = ObsidianBlack,
                                             strokeWidth = 2.dp,
                                             modifier = Modifier.size(20.dp)
                                         )
@@ -638,15 +659,17 @@ fun AuthScreen(
                                         Text(
                                             text = "กำลังสมัครสมาชิก...",
                                             style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = ObsidianBlack
                                         )
                                     } else {
-                                        Icon(Icons.Rounded.PersonAdd, contentDescription = null)
+                                        Icon(Icons.Rounded.PersonAdd, contentDescription = null, tint = ObsidianBlack)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             text = "สมัครสมาชิกด้วย Google",
                                             style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = ObsidianBlack
                                         )
                                     }
                                 }

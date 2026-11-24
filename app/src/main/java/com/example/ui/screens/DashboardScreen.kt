@@ -56,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -322,25 +323,33 @@ fun DashboardScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
-                                OutlinedButton(
-                                    onClick = { showGoalDialog = true },
+                                Surface(
                                     shape = RoundedCornerShape(14.dp),
-                                    border = BorderStroke(1.dp, EmeraldPulse.copy(alpha = 0.55f)),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                    modifier = Modifier.testTag("edit_goal_button")
+                                    color = DeepForestGreen.copy(alpha = 0.9f),
+                                    border = BorderStroke(1.2.dp, NeonLime.copy(alpha = 0.65f)),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .bounceClickable { showGoalDialog = true }
+                                        .testTag("edit_goal_button")
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Edit,
-                                        contentDescription = null,
-                                        tint = NeonLime,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (data.dailyGoal.isFreeMode) "อิสระ" else "${data.dailyGoal.goalMinutes}น.",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = Color.White
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Edit,
+                                            contentDescription = "ตั้งเป้าหมายรายวัน",
+                                            tint = NeonLime,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = if (data.dailyGoal.isFreeMode) "เป้า: อิสระ" else "เป้า ${data.dailyGoal.goalMinutes}น.",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = NeonLime,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
 
@@ -464,6 +473,25 @@ fun DashboardScreen(
                 }
             }
 
+            // 3.5 Primary Hero CTA Button
+            item {
+                NeonPulseButton(
+                    text = "เริ่มออกกำลังกายเลย",
+                    onClick = onStartExerciseClick,
+                    leadingContent = {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = null,
+                            tint = ObsidianBlack,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("dashboard_start_workout_cta")
+                )
+            }
+
             // 4. Daily Workout Recommendation (Realistic Athlete Photography)
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -580,16 +608,35 @@ fun DashboardScreen(
                                     )
                                 }
                                 Surface(
-                                    shape = CircleShape,
-                                    color = EmeraldPulse,
-                                    modifier = Modifier.size(48.dp)
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = Color.Transparent,
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
+                                    modifier = Modifier
+                                        .shadow(
+                                            elevation = 10.dp,
+                                            shape = RoundedCornerShape(999.dp),
+                                            ambientColor = NeonLime,
+                                            spotColor = EmeraldPulse
+                                        )
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(Brush.horizontalGradient(listOf(EmeraldPulse, NeonLime)))
                                 ) {
-                                    Box(contentAlignment = Alignment.Center) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
                                         Icon(
                                             imageVector = Icons.Rounded.PlayArrow,
                                             contentDescription = "เริ่มฝึก",
                                             tint = ObsidianBlack,
-                                            modifier = Modifier.size(28.dp)
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Text(
+                                            text = "เริ่มฝึก",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = ObsidianBlack,
+                                            fontWeight = FontWeight.ExtraBold
                                         )
                                     }
                                 }
@@ -797,9 +844,17 @@ private fun GlassHubTile(
     modifier: Modifier = Modifier
 ) {
     GlassPulseCard(
+        highlightGlow = true,
         cornerRadius = 22.dp,
-        accentBorder = accent.copy(alpha = 0.35f),
-        modifier = modifier.bounceClickable(onClick = onClick)
+        accentBorder = accent.copy(alpha = 0.65f),
+        modifier = modifier
+            .shadow(
+                elevation = 8.dp,
+                shape = RoundedCornerShape(22.dp),
+                ambientColor = accent.copy(alpha = 0.35f),
+                spotColor = accent.copy(alpha = 0.45f)
+            )
+            .bounceClickable(onClick = onClick)
     ) {
         Row(
             modifier = Modifier
@@ -810,19 +865,19 @@ private fun GlassHubTile(
         ) {
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(accent.copy(alpha = 0.16f)),
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(Brush.linearGradient(listOf(accent, EmeraldPulse))),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(imageVector = icon, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+                Icon(imageVector = icon, contentDescription = null, tint = ObsidianBlack, modifier = Modifier.size(22.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,
                     color = Color.White,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -830,16 +885,25 @@ private fun GlassHubTile(
                     text = subtitle,
                     style = MaterialTheme.typography.labelSmall,
                     color = accent,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Icon(
-                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.6f),
-                modifier = Modifier.size(18.dp)
-            )
+            Surface(
+                shape = CircleShape,
+                color = accent.copy(alpha = 0.18f),
+                modifier = Modifier.size(26.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
         }
     }
 }

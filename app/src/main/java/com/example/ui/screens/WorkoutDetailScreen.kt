@@ -34,6 +34,8 @@ import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -53,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -69,7 +72,9 @@ import com.example.data.model.WorkoutProgram
 import com.example.domain.DateStreakUtils
 import com.example.ui.components.GlassPulseCard
 import com.example.ui.components.NeonPulseButton
+import com.example.ui.components.PulseSecondaryActionButton
 import com.example.ui.components.bounceClickable
+import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.DeepForestGreen
 import com.example.ui.theme.EmeraldPulse
 import com.example.ui.theme.NeonLime
@@ -338,28 +343,48 @@ fun WorkoutDetailScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            OutlinedButton(
+                            val timerBtnShape = RoundedCornerShape(14.dp)
+                            Button(
                                 onClick = {
                                     if (restRemainingSec == 0) restRemainingSec = restPresetSec
                                     isTimerRunning = !isTimerRunning
                                 },
-                                shape = RoundedCornerShape(14.dp),
-                                border = BorderStroke(1.dp, NeonLime.copy(alpha = 0.65f)),
+                                shape = timerBtnShape,
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color.Transparent,
+                                    contentColor = ObsidianBlack
+                                ),
+                                contentPadding = PaddingValues(0.dp),
                                 modifier = Modifier
                                     .weight(1f)
-                                    .height(48.dp)
+                                    .height(50.dp)
+                                    .shadow(
+                                        elevation = 8.dp,
+                                        shape = timerBtnShape,
+                                        ambientColor = if (isTimerRunning) AmberWarm else NeonLime,
+                                        spotColor = if (isTimerRunning) AmberWarm else EmeraldPulse
+                                    )
+                                    .clip(timerBtnShape)
+                                    .background(
+                                        if (isTimerRunning) {
+                                            Brush.horizontalGradient(listOf(AmberWarm, Color(0xFFFFD54F)))
+                                        } else {
+                                            Brush.horizontalGradient(listOf(EmeraldPulse, NeonLime))
+                                        }
+                                    )
                                     .testTag("rest_timer_toggle_button")
                             ) {
                                 Icon(
                                     imageVector = if (isTimerRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                     contentDescription = null,
-                                    tint = NeonLime
+                                    tint = ObsidianBlack
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = if (isTimerRunning) "Pause Rest" else "Start Rest",
-                                    color = NeonLime,
-                                    fontWeight = FontWeight.Bold
+                                    color = ObsidianBlack,
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
                             OutlinedButton(
@@ -368,13 +393,14 @@ fun WorkoutDetailScreen(
                                     restRemainingSec = restPresetSec
                                 },
                                 shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
                                 modifier = Modifier
-                                    .height(48.dp)
+                                    .height(50.dp)
                                     .testTag("rest_timer_reset_button")
                             ) {
                                 Icon(Icons.Rounded.Refresh, contentDescription = "Reset Timer", tint = Color.White)
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Reset", color = Color.White)
+                                Text("Reset", color = Color.White, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -435,16 +461,21 @@ fun WorkoutDetailScreen(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(
+                PulseSecondaryActionButton(
+                    text = "วอร์มอัพ",
                     onClick = { onStartPreStretch(program) },
-                    shape = RoundedCornerShape(18.dp),
-                    border = BorderStroke(1.dp, EmeraldPulse.copy(alpha = 0.5f)),
+                    leadingContent = {
+                        Icon(
+                            Icons.Rounded.AccessibilityNew,
+                            contentDescription = "วอร์มอัพ",
+                            tint = NeonLime,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    },
                     modifier = Modifier
-                        .height(54.dp)
+                        .height(56.dp)
                         .testTag("detail_stretch_button")
-                ) {
-                    Icon(Icons.Rounded.AccessibilityNew, contentDescription = "วอร์มอัพ", tint = EmeraldPulse)
-                }
+                )
 
                 NeonPulseButton(
                     text = "START WORKOUT",

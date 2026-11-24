@@ -68,6 +68,7 @@ import com.example.ui.components.ActivityBarChart
 import com.example.ui.components.CalorieBarPoint
 import com.example.ui.components.CaloriesBurnedChart
 import com.example.ui.components.GlassPulseCard
+import com.example.ui.components.PulseSecondaryActionButton
 import com.example.ui.components.WeightTrendSparkline
 import com.example.ui.theme.DeepForestGreen
 import com.example.ui.theme.ElectricCyan
@@ -377,16 +378,16 @@ fun ProgressScreen(
                             }
                         }
 
-                        OutlinedButton(
+                        PulseSecondaryActionButton(
+                            text = "บันทึก",
                             onClick = { showWeightDialog = true },
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, EmeraldPulse.copy(alpha = 0.5f)),
-                            modifier = Modifier.testTag("update_weight_button")
-                        ) {
-                            Icon(Icons.Rounded.Edit, contentDescription = null, tint = NeonLime, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("บันทึก", color = Color.White)
-                        }
+                            leadingContent = {
+                                Icon(Icons.Rounded.Edit, contentDescription = null, tint = NeonLime, modifier = Modifier.size(16.dp))
+                            },
+                            modifier = Modifier
+                                .height(48.dp)
+                                .testTag("update_weight_button")
+                        )
                     }
 
                     WeightTrendSparkline(weightsKg = weightHistory)

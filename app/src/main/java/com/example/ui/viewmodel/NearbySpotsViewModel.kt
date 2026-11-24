@@ -224,11 +224,11 @@ class NearbySpotsViewModel(
 
         isLocationListening = started
 
-        // Watchdog: if GPS takes > 3.5s on emulator / indoors, automatically load spots around default center
+        // Watchdog: if GPS takes > 1.6s on emulator / indoors, automatically load spots around default center
         gpsFallbackWatchdogJob?.cancel()
         if (_uiState.value.userLat == null) {
             gpsFallbackWatchdogJob = viewModelScope.launch {
-                delay(3500)
+                delay(1600)
                 if (_uiState.value.userLat == null && _uiState.value.searchCenterLat == null) {
                     useFallbackLocationIfNeeded()
                 }
@@ -282,7 +282,7 @@ class NearbySpotsViewModel(
         val cLat = state.activeCenterLat
         val cLng = state.activeCenterLng
         if (cLat != null && cLng != null) {
-            fetchNearbySpots(centerLat = cLat, centerLng = cLng)
+            fetchNearbySpots(centerLat = cLat, centerLng = cLng, forceRefresh = true)
         } else {
             if (hasLocationPermission()) {
                 isLocationListening = false
@@ -364,7 +364,17 @@ class NearbySpotsViewModel(
             )
         }
 
-        if (!hasFetchedInitialSpots || wasUsingFallback) {
+        val distanceFromFallback = haversineMeters(
+            lat,
+            lng,
+            NearbySpotsRepository.DEFAULT_THAILAND_LAT,
+            NearbySpotsRepository.DEFAULT_THAILAND_LNG
+        )
+        val shouldSkipFallbackRefetch = wasUsingFallback &&
+            distanceFromFallback <= 650.0 &&
+            (_uiState.value.allSpots.isNotEmpty() || spotsFetchJob?.isActive == true)
+
+        if (!hasFetchedInitialSpots || (wasUsingFallback && !shouldSkipFallbackRefetch)) {
             hasFetchedInitialSpots = true
             fetchNearbySpots(centerLat = lat, centerLng = lng)
         }
@@ -420,7 +430,8 @@ class NearbySpotsViewModel(
     fun fetchNearbySpots(
         centerLat: Double? = _uiState.value.activeCenterLat,
         centerLng: Double? = _uiState.value.activeCenterLng,
-        radiusMeters: Int = _uiState.value.radiusMeters
+        radiusMeters: Int = _uiState.value.radiusMeters,
+        forceRefresh: Boolean = false
     ) {
         val lat = centerLat ?: return
         val lng = centerLng ?: return
@@ -428,43 +439,64 @@ class NearbySpotsViewModel(
         spotsFetchJob?.cancel()
         spotsFetchJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoadingSpots = true, spotsError = null) }
-            val result = repository.fetchNearbySpots(lat, lng, radiusMeters)
+            val result = repository.fetchNearbySpots(
+                userLat = lat,
+                userLng = lng,
+                radiusMeters = radiusMeters,
+                forceRefresh = forceRefresh,
+                onPartialSpots = { partial ->
+                    applyFetchedSpotsUpdate(partial, lat, lng, isStillLoading = true)
+                }
+            )
             result.fold(
                 onSuccess = { spots ->
-                    val uLat = _uiState.value.userLat ?: lat
-                    val uLng = _uiState.value.userLng ?: lng
-                    val distanceSorted = spots.map { s ->
-                        s.copy(distanceMeters = haversineMeters(uLat, uLng, s.lat, s.lng).roundToInt().coerceAtLeast(1))
-                    }.sortedBy { it.distanceMeters }
-
-                    _uiState.update { state ->
-                        val visible = computeVisibleSpots(
-                            allSpots = distanceSorted,
-                            remoteSearchSpots = state.remoteSearchSpots,
-                            isSearchModeActive = state.isSearchModeActive,
-                            category = state.selectedCategory,
-                            query = state.searchQuery
-                        )
-                        val preservedSelection = state.selectedSpot?.let { prev ->
-                            visible.firstOrNull { it.id == prev.id } ?: prev
-                        }
-                        state.copy(
-                            isLoadingSpots = false,
-                            spotsError = null,
-                            allSpots = distanceSorted,
-                            filteredSpots = visible,
-                            selectedSpot = preservedSelection
-                        )
-                    }
+                    applyFetchedSpotsUpdate(spots, lat, lng, isStillLoading = false)
                 },
                 onFailure = { err ->
-                    _uiState.update {
-                        it.copy(
-                            isLoadingSpots = false,
-                            spotsError = "ไม่สามารถดึงสถานที่ใกล้คุณได้ในขณะนี้ (${err.localizedMessage ?: "โปรดตรวจสอบอินเทอร์เน็ต"})"
-                        )
+                    _uiState.update { state ->
+                        if (state.allSpots.isNotEmpty()) {
+                            state.copy(isLoadingSpots = false, spotsError = null)
+                        } else {
+                            state.copy(
+                                isLoadingSpots = false,
+                                spotsError = "ไม่สามารถดึงสถานที่ใกล้คุณได้ในขณะนี้ (${err.localizedMessage ?: "โปรดตรวจสอบอินเทอร์เน็ต"})"
+                            )
+                        }
                     }
                 }
+            )
+        }
+    }
+
+    private fun applyFetchedSpotsUpdate(
+        spots: List<WorkoutSpot>,
+        fallbackLat: Double,
+        fallbackLng: Double,
+        isStillLoading: Boolean
+    ) {
+        val uLat = _uiState.value.userLat ?: fallbackLat
+        val uLng = _uiState.value.userLng ?: fallbackLng
+        val distanceSorted = spots.map { s ->
+            s.copy(distanceMeters = haversineMeters(uLat, uLng, s.lat, s.lng).roundToInt().coerceAtLeast(1))
+        }.sortedBy { it.distanceMeters }
+
+        _uiState.update { state ->
+            val visible = computeVisibleSpots(
+                allSpots = distanceSorted,
+                remoteSearchSpots = state.remoteSearchSpots,
+                isSearchModeActive = state.isSearchModeActive,
+                category = state.selectedCategory,
+                query = state.searchQuery
+            )
+            val preservedSelection = state.selectedSpot?.let { prev ->
+                visible.firstOrNull { it.id == prev.id } ?: prev
+            }
+            state.copy(
+                isLoadingSpots = isStillLoading,
+                spotsError = null,
+                allSpots = distanceSorted,
+                filteredSpots = visible,
+                selectedSpot = preservedSelection
             )
         }
     }

@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -58,6 +59,8 @@ import com.example.data.model.WorkoutCatalog
 import com.example.data.model.WorkoutCategory
 import com.example.data.model.WorkoutDifficulty
 import com.example.data.model.WorkoutProgram
+import com.example.ui.components.NeonPulseButton
+import com.example.ui.components.PulseSecondaryActionButton
 import com.example.ui.components.StaggeredEntrance
 import com.example.ui.components.bounceClickable
 import com.example.ui.theme.DeepForestGreen
@@ -120,32 +123,38 @@ fun WorkoutCatalogScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    OutlinedButton(
+                    NeonPulseButton(
+                        text = "8 กีฬา AI/GPS",
                         onClick = onOpenLiveSportsPicker,
-                        shape = RoundedCornerShape(16.dp),
-                        border = BorderStroke(1.dp, EmeraldPulse.copy(alpha = 0.55f)),
+                        leadingContent = {
+                            Icon(
+                                Icons.Rounded.SportsHandball,
+                                contentDescription = null,
+                                tint = ObsidianBlack,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
                         modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
+                            .weight(1.08f)
+                            .height(52.dp)
                             .testTag("open_live_sports_button")
-                    ) {
-                        Icon(Icons.Rounded.SportsHandball, contentDescription = null, tint = NeonLime, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("8 กีฬา AI/GPS", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                    }
-                    OutlinedButton(
+                    )
+                    PulseSecondaryActionButton(
+                        text = "สถานที่ใกล้ฉัน",
                         onClick = onOpenNearbySpots,
-                        shape = RoundedCornerShape(16.dp),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)),
+                        leadingContent = {
+                            Icon(
+                                Icons.Rounded.Explore,
+                                contentDescription = null,
+                                tint = NeonLime,
+                                modifier = Modifier.size(19.dp)
+                            )
+                        },
                         modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
+                            .weight(0.92f)
+                            .height(52.dp)
                             .testTag("workout_nearby_spots_button")
-                    ) {
-                        Icon(Icons.Rounded.Explore, contentDescription = null, tint = EmeraldPulse, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("สถานที่ใกล้ฉัน", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                    }
+                    )
                 }
             }
         }
@@ -312,16 +321,35 @@ private fun WorkoutPhotoCard(
                     }
 
                     Surface(
-                        shape = CircleShape,
-                        color = NeonLime,
-                        modifier = Modifier.size(38.dp)
+                        shape = RoundedCornerShape(999.dp),
+                        color = Color.Transparent,
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
+                        modifier = Modifier
+                            .shadow(
+                                elevation = 8.dp,
+                                shape = RoundedCornerShape(999.dp),
+                                ambientColor = NeonLime,
+                                spotColor = EmeraldPulse
+                            )
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Brush.horizontalGradient(listOf(EmeraldPulse, NeonLime)))
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "เริ่มฝึก",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = ObsidianBlack,
+                                fontWeight = FontWeight.ExtraBold
+                            )
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
                                 contentDescription = "เปิดรายละเอียด",
                                 tint = ObsidianBlack,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }

@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -40,8 +41,10 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.ui.theme.DeepForestGreen
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.EmeraldPulse
@@ -216,7 +219,7 @@ fun MultiActivityRings(
 }
 
 /**
- * High-energy Emerald-to-Neon-Lime primary gradient CTA button.
+ * High-energy Emerald-to-Neon-Lime primary gradient CTA button with neon glow & specular border.
  */
 @Composable
 fun NeonPulseButton(
@@ -226,10 +229,12 @@ fun NeonPulseButton(
     enabled: Boolean = true,
     leadingContent: (@Composable () -> Unit)? = null
 ) {
+    val shape = RoundedCornerShape(18.dp)
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(18.dp),
+        shape = shape,
+        border = if (enabled) BorderStroke(1.2.dp, Color.White.copy(alpha = 0.45f)) else null,
         colors = ButtonDefaults.buttonColors(
             containerColor = Color.Transparent,
             contentColor = ObsidianBlack,
@@ -238,8 +243,20 @@ fun NeonPulseButton(
         ),
         contentPadding = PaddingValues(0.dp),
         modifier = modifier
-            .height(54.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .height(56.dp)
+            .then(
+                if (enabled) {
+                    Modifier.shadow(
+                        elevation = 14.dp,
+                        shape = shape,
+                        ambientColor = NeonLime,
+                        spotColor = EmeraldPulse
+                    )
+                } else {
+                    Modifier
+                }
+            )
+            .clip(shape)
             .background(
                 if (enabled) {
                     Brush.horizontalGradient(listOf(EmeraldPulse, NeonLime))
@@ -247,7 +264,7 @@ fun NeonPulseButton(
                     Brush.horizontalGradient(listOf(ObsidianElevated, ObsidianElevated))
                 }
             )
-            .shimmerSweepEffect(enabled = enabled, shimmerAlpha = 0.22f)
+            .shimmerSweepEffect(enabled = enabled, shimmerAlpha = 0.25f)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 20.dp),
@@ -259,9 +276,73 @@ fun NeonPulseButton(
             }
             Text(
                 text = text,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleMedium.copy(letterSpacing = 0.3.sp),
                 fontWeight = FontWeight.ExtraBold,
-                color = if (enabled) ObsidianBlack else Color.White.copy(alpha = 0.45f)
+                color = if (enabled) ObsidianBlack else Color.White.copy(alpha = 0.45f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * High-contrast secondary action button with emerald-lime glowing border and deep forest glass fill.
+ */
+@Composable
+fun PulseSecondaryActionButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    accentColor: Color = NeonLime,
+    leadingContent: (@Composable () -> Unit)? = null
+) {
+    val shape = RoundedCornerShape(16.dp)
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        shape = shape,
+        border = BorderStroke(
+            width = 1.5.dp,
+            brush = Brush.horizontalGradient(listOf(EmeraldPulse, accentColor))
+        ),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.Transparent,
+            contentColor = Color.White,
+            disabledContainerColor = ObsidianElevated,
+            disabledContentColor = Color.White.copy(alpha = 0.4f)
+        ),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+        modifier = modifier
+            .height(50.dp)
+            .shadow(
+                elevation = 8.dp,
+                shape = shape,
+                ambientColor = EmeraldPulse.copy(alpha = 0.55f),
+                spotColor = EmeraldPulse.copy(alpha = 0.65f)
+            )
+            .clip(shape)
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(DeepForestGreen.copy(alpha = 0.92f), ObsidianElevated)
+                )
+            )
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (leadingContent != null) {
+                leadingContent()
+            }
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }

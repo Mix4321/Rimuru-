@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -110,6 +111,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -151,10 +153,12 @@ import com.example.ui.components.bounceClickable
 import com.example.ui.components.shimmerSweepEffect
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CoralError
+import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
 import com.example.ui.theme.ForestGreenDeep
 import com.example.ui.theme.MintBright
+import com.example.ui.theme.ObsidianBlack
 import com.example.ui.viewmodel.HiitPhase
 import com.example.ui.viewmodel.ManualEffortLevel
 import com.example.ui.viewmodel.WorkoutTimerStyle
@@ -1142,21 +1146,8 @@ private fun PinnedLiveTelemetryDock(
         }
 
         // Pinned Action Controls Row (Always at bottom — Zero Scroll)
-        val pauseResumeColor by animateColorAsState(
-            targetValue = if (uiState.isRunning) AmberWarm else ForestGreen,
-            animationSpec = tween(220),
-            label = "pause_resume_bg"
-        )
-        val finishBgColor by animateColorAsState(
-            targetValue = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.surfaceVariant,
-            animationSpec = tween(220),
-            label = "finish_bg"
-        )
-        val finishContentColor by animateColorAsState(
-            targetValue = if (uiState.canSaveWorkout) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-            animationSpec = tween(220),
-            label = "finish_fg"
-        )
+        val pauseResumeShape = RoundedCornerShape(18.dp)
+        val finishShape = RoundedCornerShape(18.dp)
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1165,16 +1156,39 @@ private fun PinnedLiveTelemetryDock(
             Button(
                 onClick = onToggleRun,
                 enabled = !uiState.isSaving,
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = pauseResumeColor),
+                shape = pauseResumeShape,
+                border = BorderStroke(1.2.dp, Color.White.copy(alpha = 0.4f)),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = ObsidianBlack,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                contentPadding = PaddingValues(0.dp),
                 modifier = Modifier
                     .weight(1f)
-                    .height(54.dp)
+                    .height(58.dp)
+                    .shadow(
+                        elevation = 10.dp,
+                        shape = pauseResumeShape,
+                        ambientColor = if (uiState.isRunning) AmberWarm else MintBright,
+                        spotColor = if (uiState.isRunning) AmberWarm else EmeraldVibrant
+                    )
+                    .clip(pauseResumeShape)
+                    .background(
+                        if (uiState.isRunning) {
+                            Brush.horizontalGradient(listOf(AmberWarm, Color(0xFFFFD54F)))
+                        } else {
+                            Brush.horizontalGradient(listOf(EmeraldVibrant, MintBright))
+                        }
+                    )
+                    .shimmerSweepEffect(enabled = !uiState.isRunning && !uiState.isSaving, shimmerAlpha = 0.22f)
                     .testTag("workout_pause_resume_button")
             ) {
                 Icon(
                     imageVector = if (uiState.isRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    contentDescription = null
+                    contentDescription = null,
+                    tint = ObsidianBlack
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
@@ -1184,45 +1198,74 @@ private fun PinnedLiveTelemetryDock(
                         else -> "เริ่ม"
                     },
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.ExtraBold,
+                    color = ObsidianBlack
                 )
             }
 
             Button(
                 onClick = onFinishClick,
                 enabled = !uiState.isSaving,
-                shape = RoundedCornerShape(16.dp),
+                shape = finishShape,
+                border = if (uiState.canSaveWorkout) {
+                    BorderStroke(1.2.dp, Color.White.copy(alpha = 0.45f))
+                } else {
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = finishBgColor,
-                    contentColor = finishContentColor
+                    containerColor = Color.Transparent,
+                    contentColor = if (uiState.canSaveWorkout) ObsidianBlack else MaterialTheme.colorScheme.onSurfaceVariant
                 ),
+                contentPadding = PaddingValues(0.dp),
                 modifier = Modifier
                     .weight(1f)
-                    .height(54.dp)
-                    .clip(RoundedCornerShape(16.dp))
+                    .height(58.dp)
+                    .then(
+                        if (uiState.canSaveWorkout && !uiState.isSaving) {
+                            Modifier.shadow(
+                                elevation = 12.dp,
+                                shape = finishShape,
+                                ambientColor = ElectricCyan,
+                                spotColor = EmeraldVibrant
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .clip(finishShape)
+                    .background(
+                        if (uiState.canSaveWorkout) {
+                            Brush.horizontalGradient(listOf(EmeraldVibrant, ElectricCyan))
+                        } else {
+                            val fallbackBg = MaterialTheme.colorScheme.surfaceVariant
+                            Brush.horizontalGradient(listOf(fallbackBg, fallbackBg))
+                        }
+                    )
                     .shimmerSweepEffect(
                         enabled = uiState.canSaveWorkout && !uiState.isSaving,
-                        shimmerAlpha = 0.18f,
-                        durationMillis = 2600
+                        shimmerAlpha = 0.22f,
+                        durationMillis = 2400
                     )
                     .testTag("workout_finish_button")
             ) {
                 if (uiState.isSaving) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
-                        color = Color.White,
+                        color = ObsidianBlack,
                         strokeWidth = 2.dp
                     )
                 } else {
                     Icon(
                         imageVector = if (uiState.canSaveWorkout) Icons.Rounded.CheckCircle else Icons.Rounded.Stop,
-                        contentDescription = null
+                        contentDescription = null,
+                        tint = if (uiState.canSaveWorkout) ObsidianBlack else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = if (uiState.canSaveWorkout) "บันทึกผล" else "จบ",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (uiState.canSaveWorkout) ObsidianBlack else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

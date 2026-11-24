@@ -87,6 +87,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -117,6 +118,7 @@ import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
 import com.example.ui.theme.ForestGreenDeep
 import com.example.ui.theme.MintBright
+import com.example.ui.theme.ObsidianBlack
 import com.example.ui.viewmodel.NearbySpotsUiState
 import com.example.ui.viewmodel.NearbySpotsViewModel
 
@@ -655,6 +657,8 @@ private fun NearbyMapPanel(
                             Text(
                                 text = when {
                                     uiState.isSearchingPlaces -> "กำลังค้นหา \"${uiState.searchQuery.trim()}\"..."
+                                    uiState.isLoadingSpots && uiState.filteredSpots.isNotEmpty() ->
+                                        "พบ ${uiState.filteredSpots.size} แห่ง (กำลังรวมเพิ่ม...)"
                                     uiState.isLoadingSpots -> "กำลังรวบรวมสถานที่ใกล้ฉัน..."
                                     uiState.isSearchModeActive && uiState.filteredSpots.isNotEmpty() -> {
                                         val nearest = uiState.filteredSpots.first()
@@ -1216,6 +1220,7 @@ private fun SelectedSpotNavigationCard(
             }
 
             // Primary Navigation + External Google Maps + Start Workout Buttons
+            val navBtnShape = RoundedCornerShape(16.dp)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1224,46 +1229,64 @@ private fun SelectedSpotNavigationCard(
                     onClick = {
                         if (uiState.isNavigatingLive) onStopLiveNav() else onStartLiveNav()
                     },
-                    shape = RoundedCornerShape(16.dp),
+                    shape = navBtnShape,
+                    border = BorderStroke(1.2.dp, Color.White.copy(alpha = 0.45f)),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (uiState.isNavigatingLive) AmberWarm else ForestGreen
+                        containerColor = Color.Transparent,
+                        contentColor = ObsidianBlack
                     ),
+                    contentPadding = PaddingValues(0.dp),
                     modifier = Modifier
                         .weight(1.15f)
-                        .height(50.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .shimmerSweepEffect(enabled = !uiState.isNavigatingLive, shimmerAlpha = 0.18f)
+                        .height(54.dp)
+                        .shadow(
+                            elevation = 10.dp,
+                            shape = navBtnShape,
+                            ambientColor = if (uiState.isNavigatingLive) AmberWarm else MintBright,
+                            spotColor = if (uiState.isNavigatingLive) AmberWarm else EmeraldVibrant
+                        )
+                        .clip(navBtnShape)
+                        .background(
+                            if (uiState.isNavigatingLive) {
+                                Brush.horizontalGradient(listOf(AmberWarm, Color(0xFFFFD54F)))
+                            } else {
+                                Brush.horizontalGradient(listOf(EmeraldVibrant, MintBright))
+                            }
+                        )
+                        .shimmerSweepEffect(enabled = !uiState.isNavigatingLive, shimmerAlpha = 0.22f)
                         .testTag("start_in_app_nav_button")
                 ) {
-                    Icon(Icons.Rounded.Navigation, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Rounded.Navigation, contentDescription = null, tint = ObsidianBlack, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = if (uiState.isNavigatingLive) "หยุดนำทาง" else "นำทางในแอป",
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.ExtraBold,
+                        color = ObsidianBlack
                     )
                 }
 
                 OutlinedButton(
                     onClick = { launchExternalNavigation(context, spot, uiState.travelMode) },
-                    shape = RoundedCornerShape(16.dp),
+                    shape = navBtnShape,
+                    border = BorderStroke(1.5.dp, EmeraldVibrant.copy(alpha = 0.7f)),
                     modifier = Modifier
                         .weight(0.85f)
-                        .height(50.dp)
+                        .height(54.dp)
                         .testTag("open_external_maps_button")
                 ) {
-                    Icon(Icons.Rounded.Map, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Rounded.Map, contentDescription = null, tint = EmeraldVibrant, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Google Maps", maxLines = 1)
+                    Text("Google Maps", maxLines = 1, fontWeight = FontWeight.Bold)
                 }
             }
 
             OutlinedButton(
                 onClick = onStartWorkoutAtSpot,
                 shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, EmeraldVibrant.copy(alpha = 0.55f)),
+                border = BorderStroke(1.5.dp, MintBright.copy(alpha = 0.65f)),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
+                    .height(50.dp)
                     .testTag("start_workout_at_spot_button")
             ) {
                 Icon(
@@ -1275,7 +1298,7 @@ private fun SelectedSpotNavigationCard(
                 Text(
                     text = "เริ่มออกกำลังกาย (${spot.suggestedSport.thaiName}) ที่นี่",
                     color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.ExtraBold
                 )
             }
         }
@@ -1360,15 +1383,26 @@ private fun LocationPermissionPromptCard(onRequestLocation: () -> Unit) {
                     )
                 }
             }
+            val gpsBtnShape = RoundedCornerShape(16.dp)
             Button(
                 onClick = onRequestLocation,
-                shape = RoundedCornerShape(14.dp),
+                shape = gpsBtnShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = ObsidianBlack
+                ),
+                contentPadding = PaddingValues(0.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
+                    .height(50.dp)
+                    .shadow(8.dp, gpsBtnShape, ambientColor = MintBright, spotColor = EmeraldVibrant)
+                    .clip(gpsBtnShape)
+                    .background(Brush.horizontalGradient(listOf(EmeraldVibrant, MintBright)))
                     .testTag("request_nearby_location_permission_button")
             ) {
-                Text("อนุญาตตำแหน่ง (GPS)", fontWeight = FontWeight.Bold)
+                Icon(Icons.Rounded.GpsFixed, contentDescription = null, tint = ObsidianBlack, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("อนุญาตตำแหน่ง (GPS)", fontWeight = FontWeight.ExtraBold, color = ObsidianBlack)
             }
         }
     }
@@ -1445,75 +1479,91 @@ private fun SpotsListSectionHeader(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-        } else if (activeError != null) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.errorContainer,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+        } else {
+            if (uiState.isLoadingSpots && uiState.allSpots.isNotEmpty()) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(vertical = 2.dp)
                 ) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                     Text(
-                        text = activeError,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.weight(1f)
+                        text = "กำลังเพิ่มรายละเอียดและสถานที่เพิ่มเติมรอบตัวคุณ...",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
-                    TextButton(onClick = onRetryFetch) {
-                        Text("ลองใหม่", fontWeight = FontWeight.Bold)
-                    }
                 }
             }
-        } else if (uiState.filteredSpots.isEmpty() &&
-            (uiState.isSearchModeActive || uiState.activeCenterLat != null) &&
-            !uiState.isLoadingSpots &&
-            !uiState.isSearchingPlaces
-        ) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            if (activeError != null) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    if (uiState.isSearchModeActive) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
                         Text(
-                            text = "ไม่พบแหล่งออกกำลังกายที่ตรงกับ \"${uiState.searchQuery.trim()}\"",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "ลองพิมพ์ชื่อสถานที่ภาษาอังกฤษ/ภาษาไทย หรือเลือกย่านจากรายการแนะนำด้านบน",
+                            text = activeError,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.weight(1f)
                         )
-                        OutlinedButton(onClick = onClearSearch) {
-                            Text("แสดงสถานที่ใกล้ฉันทั้งหมด")
+                        TextButton(onClick = onRetryFetch) {
+                            Text("ลองใหม่", fontWeight = FontWeight.Bold)
                         }
-                    } else if (uiState.radiusMeters == NearbySpotsRepository.UNLIMITED_RADIUS_METERS) {
-                        Text(
-                            text = "ไม่พบแหล่งออกกำลังกายในหมวด \"${uiState.selectedCategory.thaiLabel}\" ในบริเวณนี้",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "ลองเลือกหมวด \"ทั้งหมด\" หรือพิมพ์ค้นหาชื่อสถานที่และย่านที่ต้องการด้านบน",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        Text(
-                            text = "ไม่พบแหล่งออกกำลังกายที่ตรงเงื่อนไขในรัศมี ${uiState.radiusMeters / 1000} กม.",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        OutlinedButton(onClick = onExpandToUnlimited) {
-                            Text("ค้นหาแบบไม่จำกัดระยะ")
+                    }
+                }
+            } else if (uiState.filteredSpots.isEmpty() &&
+                (uiState.isSearchModeActive || uiState.activeCenterLat != null) &&
+                !uiState.isLoadingSpots &&
+                !uiState.isSearchingPlaces
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (uiState.isSearchModeActive) {
+                            Text(
+                                text = "ไม่พบแหล่งออกกำลังกายที่ตรงกับ \"${uiState.searchQuery.trim()}\"",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "ลองพิมพ์ชื่อสถานที่ภาษาอังกฤษ/ภาษาไทย หรือเลือกย่านจากรายการแนะนำด้านบน",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedButton(onClick = onClearSearch) {
+                                Text("แสดงสถานที่ใกล้ฉันทั้งหมด")
+                            }
+                        } else if (uiState.radiusMeters == NearbySpotsRepository.UNLIMITED_RADIUS_METERS) {
+                            Text(
+                                text = "ไม่พบแหล่งออกกำลังกายในหมวด \"${uiState.selectedCategory.thaiLabel}\" ในบริเวณนี้",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "ลองเลือกหมวด \"ทั้งหมด\" หรือพิมพ์ค้นหาชื่อสถานที่และย่านที่ต้องการด้านบน",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Text(
+                                text = "ไม่พบแหล่งออกกำลังกายที่ตรงเงื่อนไขในรัศมี ${uiState.radiusMeters / 1000} กม.",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            OutlinedButton(onClick = onExpandToUnlimited) {
+                                Text("ค้นหาแบบไม่จำกัดระยะ")
+                            }
                         }
                     }
                 }
@@ -1643,10 +1693,13 @@ private fun NearbySpotRowCard(
 
             Surface(
                 shape = CircleShape,
-                color = ForestGreen,
+                color = Color.Transparent,
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
                 modifier = Modifier
                     .size(48.dp)
+                    .shadow(8.dp, CircleShape, ambientColor = MintBright, spotColor = EmeraldVibrant)
                     .clip(CircleShape)
+                    .background(Brush.linearGradient(listOf(EmeraldVibrant, MintBright)))
                     .bounceClickable(onClick = onQuickNavigate)
                     .testTag("quick_nav_spot_${spot.id}")
             ) {
@@ -1654,7 +1707,7 @@ private fun NearbySpotRowCard(
                     Icon(
                         imageVector = Icons.Rounded.Navigation,
                         contentDescription = "นำทางไปยัง ${spot.name}",
-                        tint = MintBright,
+                        tint = ObsidianBlack,
                         modifier = Modifier.size(22.dp)
                     )
                 }

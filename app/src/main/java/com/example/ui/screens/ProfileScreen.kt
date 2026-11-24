@@ -87,6 +87,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -456,8 +457,19 @@ fun ProfileScreen(
                             Icon(Icons.Rounded.Flag, contentDescription = null, tint = NeonLime)
                             Text("FITNESS GOALS", style = MaterialTheme.typography.labelSmall, color = NeonLime, fontWeight = FontWeight.Bold)
                         }
-                        TextButton(onClick = { showEditGoalsDialog = true }) {
-                            Text("ปรับเป้าหมาย", color = EmeraldPulse, fontWeight = FontWeight.Bold)
+                        Surface(
+                            onClick = { showEditGoalsDialog = true },
+                            shape = RoundedCornerShape(50),
+                            color = DeepForestGreen.copy(alpha = 0.85f),
+                            border = BorderStroke(1.2.dp, NeonLime.copy(alpha = 0.75f))
+                        ) {
+                            Text(
+                                text = "ปรับเป้าหมาย",
+                                color = NeonLime,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                            )
                         }
                     }
 
@@ -502,8 +514,20 @@ fun ProfileScreen(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    TextButton(onClick = onOpenAllBadges, modifier = Modifier.testTag("profile_all_badges_button")) {
-                        Text("ดูทั้งหมด", color = EmeraldPulse, fontWeight = FontWeight.Bold)
+                    Surface(
+                        onClick = onOpenAllBadges,
+                        shape = RoundedCornerShape(50),
+                        color = EmeraldPulse.copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, EmeraldPulse.copy(alpha = 0.6f)),
+                        modifier = Modifier.testTag("profile_all_badges_button")
+                    ) {
+                        Text(
+                            text = "ดูทั้งหมด",
+                            color = NeonLime,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
                     }
                 }
 
@@ -733,12 +757,25 @@ fun ProfileScreen(
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
                                     onClick = { exportJsonLauncher.launch("green_pulse_backup_${System.currentTimeMillis() / 1000}.json") },
-                                    shape = RoundedCornerShape(14.dp),
-                                    modifier = Modifier.weight(1f).testTag("export_json_button")
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = EmeraldPulse,
+                                        contentColor = ObsidianBlack
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .shadow(
+                                            elevation = 8.dp,
+                                            shape = RoundedCornerShape(16.dp),
+                                            ambientColor = NeonLime,
+                                            spotColor = EmeraldPulse
+                                        )
+                                        .testTag("export_json_button")
                                 ) {
-                                    Icon(Icons.Rounded.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Rounded.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("JSON", maxLines = 1)
+                                    Text("JSON", maxLines = 1, fontWeight = FontWeight.ExtraBold)
                                 }
                                 OutlinedButton(
                                     onClick = { exportCsvLauncher.launch("green_pulse_workouts_${System.currentTimeMillis() / 1000}.csv") },
