@@ -107,6 +107,9 @@ data class WorkoutUiState(
     val caloriesExact: Double = 0.0,
     val isRunning: Boolean = false,
     val hasStartedOnce: Boolean = false,
+    val autoPauseEnabled: Boolean = true,
+    val isAutoPaused: Boolean = false,
+    val autoPausedSeconds: Int = 0,
     val trackingMode: TrackingMode = TrackingMode.SENSOR_GPS,
     val timerStyle: WorkoutTimerStyle = WorkoutTimerStyle.FREE,
     val hiitWorkSeconds: Int = 30,
@@ -172,10 +175,19 @@ class WorkoutViewModel(
     private var symmetrySamples: Int = 0
     private var lastAnnouncedRepMilestone: Int = 0
     private var lastAnnouncedKmSplit: Int = 0
+    private var autoPauseManuallyOverridden: Boolean = false
     private var circuitExerciseNames: List<String> = listOf("สควอท", "วิดพื้น", "แพลงก์", "กระโดดตบ")
 
     fun updateAppSettings(settings: AppSettings) {
         currentSettings = settings
+        if (!autoPauseManuallyOverridden) {
+            _uiState.update { state ->
+                state.copy(
+                    autoPauseEnabled = settings.autoPauseEnabled,
+                    isAutoPaused = if (settings.autoPauseEnabled) state.isAutoPaused else false
+                )
+            }
+        }
     }
 
     private fun effectiveStrideMeters(sport: SportType): Double = when (sport) {
@@ -204,6 +216,9 @@ class WorkoutViewModel(
             startedAtMillis = now,
             isRunning = false,
             hasStartedOnce = false,
+            autoPauseEnabled = currentSettings.autoPauseEnabled,
+            isAutoPaused = false,
+            autoPausedSeconds = 0,
             trackingMode = initialMode,
             timerStyle = timerStyle,
             hiitWorkSeconds = safeWork,
@@ -233,6 +248,9 @@ class WorkoutViewModel(
             caloriesExact = draft.caloriesExact,
             isRunning = false,
             hasStartedOnce = true,
+            autoPauseEnabled = currentSettings.autoPauseEnabled,
+            isAutoPaused = false,
+            autoPausedSeconds = 0,
             trackingMode = draft.trackingMode,
             routePoints = RouteJsonCodec.decode(draft.routeJson)
         )
@@ -248,6 +266,7 @@ class WorkoutViewModel(
         symmetrySamples = 0
         lastAnnouncedRepMilestone = 0
         lastAnnouncedKmSplit = 0
+        autoPauseManuallyOverridden = false
     }
 
     private fun loadProfileAndGhostRival(sportType: SportType) {
@@ -313,6 +332,28 @@ class WorkoutViewModel(
         _uiState.update { it.copy(voiceCoachMuted = !it.voiceCoachMuted) }
     }
 
+    fun toggleAutoPauseEnabled() {
+        autoPauseManuallyOverridden = true
+        _uiState.update { state ->
+            val nextEnabled = !state.autoPauseEnabled
+            if (nextEnabled) {
+                lastMotionSeenMillis = System.currentTimeMillis()
+            }
+            state.copy(
+                autoPauseEnabled = nextEnabled,
+                isAutoPaused = if (nextEnabled) state.isAutoPaused else false
+            )
+        }
+    }
+
+    fun togglePauseFromNotification() {
+        if (_uiState.value.isRunning) {
+            pauseTimer()
+        } else {
+            startOrResumeTimer()
+        }
+    }
+
     fun consumeCoachCue() {
         _uiState.update { it.copy(coachCue = null) }
     }
@@ -352,6 +393,7 @@ class WorkoutViewModel(
             }
             state.copy(
                 trackingMode = mode,
+                isAutoPaused = false,
                 showAdjustCameraTip = false,
                 isCurrentlyMoving = false,
                 currentIntensity = 0f,
@@ -370,6 +412,7 @@ class WorkoutViewModel(
 
     fun startOrResumeTimer() {
         if (_uiState.value.isRunning) return
+        lastMotionSeenMillis = System.currentTimeMillis()
         _uiState.update {
             val startCue = if (!it.hasStartedOnce && currentSettings.enableVoiceCoach && !it.voiceCoachMuted) {
                 CoachCueEvent(
@@ -402,6 +445,7 @@ class WorkoutViewModel(
             }
             it.copy(
                 isRunning = true,
+                isAutoPaused = false,
                 hasStartedOnce = true,
                 startedAtMillis = if (it.startedAtMillis == 0L) System.currentTimeMillis() else it.startedAtMillis,
                 routePoints = seededRoute,
@@ -418,6 +462,7 @@ class WorkoutViewModel(
         _uiState.update {
             it.copy(
                 isRunning = false,
+                isAutoPaused = false,
                 isCurrentlyMoving = false,
                 currentIntensity = 0f,
                 showAdjustCameraTip = false
@@ -492,6 +537,7 @@ class WorkoutViewModel(
         _uiState.update { state ->
             if (!state.isRunning || state.trackingMode != TrackingMode.SENSOR_GPS) return@update state
             lastMotionSeenMillis = now
+            val resumedFromAutoPause = state.isAutoPaused
             val addSteps = if (state.sportType.supportsSteps) deltaSteps else 0
             val addMeters = if (state.sportType.supportsDistance && !state.gpsSnapshot.hasFix && deltaSteps > 0) {
                 accumulateMetersFromSteps(deltaSteps, effectiveStrideMeters(state.sportType).coerceAtLeast(0.72))
@@ -499,10 +545,20 @@ class WorkoutViewModel(
                 0
             }
             val updatedDist = state.distanceMeters + addMeters
-            evaluateKmSplitCue(state, updatedDist).copy(
+            val splitEvaluated = evaluateKmSplitCue(state, updatedDist)
+            val resumeCue = if (resumedFromAutoPause && splitEvaluated.coachCue == state.coachCue &&
+                currentSettings.enableVoiceCoach && !state.voiceCoachMuted
+            ) {
+                CoachCueEvent(System.nanoTime(), "กลับมาจับเวลาต่อ", priority = false, isHighChime = true)
+            } else {
+                splitEvaluated.coachCue
+            }
+            splitEvaluated.copy(
                 steps = state.steps + addSteps,
                 distanceMeters = updatedDist,
-                isCurrentlyMoving = true
+                isCurrentlyMoving = true,
+                isAutoPaused = false,
+                coachCue = resumeCue
             )
         }
     }
@@ -524,7 +580,8 @@ class WorkoutViewModel(
     fun onSensorMotionStateChanged(snapshot: SensorMotionSnapshot) {
         val now = System.currentTimeMillis()
         _uiState.update { state ->
-            if (state.trackingMode == TrackingMode.SENSOR_GPS && state.isRunning && snapshot.isMoving) {
+            val canResume = state.trackingMode == TrackingMode.SENSOR_GPS && state.isRunning && snapshot.isMoving
+            if (canResume) {
                 lastMotionSeenMillis = now
             }
             val effectiveMoving = if (state.trackingMode == TrackingMode.SENSOR_GPS) {
@@ -532,9 +589,17 @@ class WorkoutViewModel(
             } else {
                 state.isCurrentlyMoving
             }
+            val resumedFromAutoPause = canResume && state.isAutoPaused
+            val resumeCue = if (resumedFromAutoPause && currentSettings.enableVoiceCoach && !state.voiceCoachMuted) {
+                CoachCueEvent(System.nanoTime(), "กลับมาจับเวลาต่อ", priority = false, isHighChime = true)
+            } else {
+                state.coachCue
+            }
             state.copy(
                 sensorSnapshot = snapshot,
                 isCurrentlyMoving = effectiveMoving,
+                isAutoPaused = if (canResume) false else state.isAutoPaused,
+                coachCue = resumeCue,
                 currentIntensity = if (state.trackingMode == TrackingMode.SENSOR_GPS) snapshot.motionIntensity else state.currentIntensity
             )
         }
@@ -548,10 +613,21 @@ class WorkoutViewModel(
                 return@update state
             }
             lastMotionSeenMillis = now
+            val resumedFromAutoPause = state.isAutoPaused
             val updatedDist = state.distanceMeters + deltaMeters
-            evaluateKmSplitCue(state, updatedDist).copy(
+            val splitEvaluated = evaluateKmSplitCue(state, updatedDist)
+            val resumeCue = if (resumedFromAutoPause && splitEvaluated.coachCue == state.coachCue &&
+                currentSettings.enableVoiceCoach && !state.voiceCoachMuted
+            ) {
+                CoachCueEvent(System.nanoTime(), "กลับมาจับเวลาต่อ", priority = false, isHighChime = true)
+            } else {
+                splitEvaluated.coachCue
+            }
+            splitEvaluated.copy(
                 distanceMeters = updatedDist,
-                isCurrentlyMoving = true
+                isCurrentlyMoving = true,
+                isAutoPaused = false,
+                coachCue = resumeCue
             )
         }
     }
@@ -606,7 +682,10 @@ class WorkoutViewModel(
     fun onGpsStateChanged(snapshot: GpsTrackingSnapshot) {
         val now = System.currentTimeMillis()
         _uiState.update { state ->
-            if (state.trackingMode == TrackingMode.SENSOR_GPS && state.isRunning && snapshot.currentSpeedKmh >= 1.2f) {
+            val gpsMoving = state.trackingMode == TrackingMode.SENSOR_GPS &&
+                state.isRunning &&
+                snapshot.currentSpeedKmh >= 1.4f
+            if (gpsMoving) {
                 lastMotionSeenMillis = now
             }
             val mergedSnapshot = snapshot.copy(
@@ -633,9 +712,17 @@ class WorkoutViewModel(
             } else {
                 state.routePoints
             }
+            val resumedFromAutoPause = gpsMoving && state.isAutoPaused
+            val resumeCue = if (resumedFromAutoPause && currentSettings.enableVoiceCoach && !state.voiceCoachMuted) {
+                CoachCueEvent(System.nanoTime(), "กลับมาจับเวลาต่อ", priority = false, isHighChime = true)
+            } else {
+                state.coachCue
+            }
             state.copy(
                 gpsSnapshot = mergedSnapshot,
-                routePoints = updatedRoute
+                routePoints = updatedRoute,
+                isAutoPaused = if (gpsMoving) false else state.isAutoPaused,
+                coachCue = resumeCue
             )
         }
     }
@@ -683,22 +770,35 @@ class WorkoutViewModel(
                 }
 
                 val idleMillis = if (lastMotionSeenMillis > 0L) nowWall - lastMotionSeenMillis else current.elapsedSeconds * 1000L
+                val autoPauseEligible = mode == TrackingMode.SENSOR_GPS &&
+                    sport.supportsDistance &&
+                    current.autoPauseEnabled
+                val justEnteredAutoPause = autoPauseEligible &&
+                    !current.isAutoPaused &&
+                    current.elapsedSeconds >= 5 &&
+                    idleMillis >= AUTO_PAUSE_IDLE_THRESHOLD_MS
+                val isAutoPausedNow = autoPauseEligible && (current.isAutoPaused || justEnteredAutoPause)
+
                 val shouldShowCameraTip = currentSettings.autoNotifyWhenIdle &&
                     mode == TrackingMode.CAMERA_AI &&
                     (!current.poseSnapshot.isBodyVisible || (!isHoldingPlank && idleMillis >= 4000L))
 
                 val baseKcalPerSec = (sport.metValue * current.userWeightKg * 3.5 / 200.0) / 60.0
-                val intensityMultiplier = when (mode) {
-                    TrackingMode.CAMERA_AI -> {
-                        if (isHoldingPlank) 0.85
-                        else if (isMovingRecently) (0.75 + current.poseSnapshot.motionIntensity * 0.55).coerceIn(0.75, 1.35)
-                        else 0.0
+                val intensityMultiplier = if (isAutoPausedNow) {
+                    0.0
+                } else {
+                    when (mode) {
+                        TrackingMode.CAMERA_AI -> {
+                            if (isHoldingPlank) 0.85
+                            else if (isMovingRecently) (0.75 + current.poseSnapshot.motionIntensity * 0.55).coerceIn(0.75, 1.35)
+                            else 0.0
+                        }
+                        TrackingMode.SENSOR_GPS -> {
+                            if (isMovingRecently) (0.78 + current.sensorSnapshot.motionIntensity * 0.55).coerceIn(0.78, 1.38)
+                            else 0.0
+                        }
+                        TrackingMode.MANUAL -> current.manualEffort.multiplier
                     }
-                    TrackingMode.SENSOR_GPS -> {
-                        if (isMovingRecently) (0.78 + current.sensorSnapshot.motionIntensity * 0.55).coerceIn(0.78, 1.38)
-                        else 0.0
-                    }
-                    TrackingMode.MANUAL -> current.manualEffort.multiplier
                 }
 
                 val calDelta = baseKcalPerSec * intensityMultiplier * wholeSeconds
@@ -710,7 +810,16 @@ class WorkoutViewModel(
                     var nextCircuit = s.hiitCircuitLabel
                     var cue = s.coachCue
 
-                    if (s.timerStyle == WorkoutTimerStyle.HIIT && s.hiitPhase != HiitPhase.COMPLETED) {
+                    if (justEnteredAutoPause && currentSettings.enableVoiceCoach && !s.voiceCoachMuted) {
+                        cue = CoachCueEvent(
+                            id = System.nanoTime(),
+                            textThai = "หยุดพักชั่วคราวอัตโนมัติ",
+                            priority = false,
+                            isHighChime = false
+                        )
+                    }
+
+                    if (!isAutoPausedNow && s.timerStyle == WorkoutTimerStyle.HIIT && s.hiitPhase != HiitPhase.COMPLETED) {
                         nextRemain -= wholeSeconds
                         if (nextRemain <= 0) {
                             when (s.hiitPhase) {
@@ -747,11 +856,13 @@ class WorkoutViewModel(
                     }
 
                     s.copy(
-                        elapsedSeconds = s.elapsedSeconds + wholeSeconds,
-                        motionActiveSeconds = s.motionActiveSeconds + if (isMovingRecently) wholeSeconds else 0,
-                        plankHoldSeconds = s.plankHoldSeconds + if (isHoldingPlank) wholeSeconds else 0,
+                        elapsedSeconds = if (isAutoPausedNow) s.elapsedSeconds else s.elapsedSeconds + wholeSeconds,
+                        autoPausedSeconds = if (isAutoPausedNow) s.autoPausedSeconds + wholeSeconds else s.autoPausedSeconds,
+                        isAutoPaused = isAutoPausedNow,
+                        motionActiveSeconds = s.motionActiveSeconds + if (!isAutoPausedNow && isMovingRecently) wholeSeconds else 0,
+                        plankHoldSeconds = s.plankHoldSeconds + if (!isAutoPausedNow && isHoldingPlank) wholeSeconds else 0,
                         caloriesExact = s.caloriesExact + calDelta,
-                        isCurrentlyMoving = isMovingRecently,
+                        isCurrentlyMoving = !isAutoPausedNow && isMovingRecently,
                         showAdjustCameraTip = shouldShowCameraTip,
                         hiitCurrentRound = nextRound,
                         hiitPhase = nextPhase,
@@ -805,7 +916,7 @@ class WorkoutViewModel(
             workoutSubType = if (state.timerStyle == WorkoutTimerStyle.HIIT) "HIIT" else "FREE"
         )
 
-        _uiState.update { it.copy(isRunning = false, isSaving = true, errorMessage = null) }
+        _uiState.update { it.copy(isRunning = false, isAutoPaused = false, isSaving = true, errorMessage = null) }
 
         viewModelScope.launch {
             val result = repository.saveCompletedWorkoutAndSyncStreak(
@@ -846,7 +957,7 @@ class WorkoutViewModel(
         viewModelScope.launch {
             draftStore.clearDraft()
         }
-        _uiState.update { it.copy(isRunning = false) }
+        _uiState.update { it.copy(isRunning = false, isAutoPaused = false) }
     }
 
     fun persistDraftAsync() {
@@ -882,5 +993,9 @@ class WorkoutViewModel(
     override fun onCleared() {
         super.onCleared()
         timerJob?.cancel()
+    }
+
+    companion object {
+        const val AUTO_PAUSE_IDLE_THRESHOLD_MS = 5_000L
     }
 }

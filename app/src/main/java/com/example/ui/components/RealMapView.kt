@@ -107,6 +107,93 @@ fun computeKmSplitMarkers(points: List<RoutePoint>): List<KmSplitMarker> {
     return splits
 }
 
+data class KmSplitStat(
+    val splitIndex: Int,
+    val labelThai: String,
+    val segmentMeters: Int,
+    val splitSeconds: Int,
+    val paceSecondsPerKm: Int,
+    val avgSpeedKmh: Float,
+    val isPartialLeg: Boolean,
+    val isFastest: Boolean = false
+)
+
+fun computeDetailedKmSplits(points: List<RoutePoint>): List<KmSplitStat> {
+    if (points.size < 2) return emptyList()
+
+    val rawSplits = mutableListOf<KmSplitStat>()
+    var cumulativeMeters = 0.0
+    var nextKmThreshold = 1000.0
+    var legStartElapsedSec = points.first().elapsedSec.toDouble()
+    var splitIdx = 1
+
+    for (i in 1 until points.size) {
+        val prev = points[i - 1]
+        val curr = points[i]
+        val segMeters = haversineMeters(prev.lat, prev.lng, curr.lat, curr.lng)
+        if (segMeters <= 0.1) continue
+
+        val dtSec = (curr.elapsedSec - prev.elapsedSec).coerceAtLeast(0).toDouble()
+
+        while (cumulativeMeters + segMeters >= nextKmThreshold) {
+            val fraction = ((nextKmThreshold - cumulativeMeters) / segMeters).coerceIn(0.0, 1.0)
+            val crossingSec = prev.elapsedSec + dtSec * fraction
+            val splitSec = (crossingSec - legStartElapsedSec).roundToIntCompat().coerceAtLeast(1)
+            val avgSpeed = (3600.0 / splitSec).toFloat()
+
+            rawSplits += KmSplitStat(
+                splitIndex = splitIdx,
+                labelThai = "กม. $splitIdx",
+                segmentMeters = 1000,
+                splitSeconds = splitSec,
+                paceSecondsPerKm = splitSec,
+                avgSpeedKmh = avgSpeed,
+                isPartialLeg = false
+            )
+            legStartElapsedSec = crossingSec
+            splitIdx++
+            nextKmThreshold += 1000.0
+        }
+        cumulativeMeters += segMeters
+    }
+
+    val completedFullMeters = (splitIdx - 1) * 1000.0
+    val trailingMeters = cumulativeMeters - completedFullMeters
+    if (trailingMeters >= 100.0) {
+        val lastSec = points.last().elapsedSec.toDouble()
+        val trailingSec = (lastSec - legStartElapsedSec).roundToIntCompat().coerceAtLeast(1)
+        val paceSecPerKm = ((trailingSec * 1000.0) / trailingMeters).roundToIntCompat().coerceAtLeast(1)
+        val avgSpeed = ((trailingMeters / 1000.0) / (trailingSec / 3600.0)).toFloat()
+        val kmPart = trailingMeters / 1000.0
+        val label = if (splitIdx == 1) {
+            String.format(java.util.Locale.US, "ช่วง %.2f กม.", kmPart)
+        } else {
+            String.format(java.util.Locale.US, "ช่วงท้าย %.2f กม.", kmPart)
+        }
+        rawSplits += KmSplitStat(
+            splitIndex = splitIdx,
+            labelThai = label,
+            segmentMeters = trailingMeters.roundToIntCompat(),
+            splitSeconds = trailingSec,
+            paceSecondsPerKm = paceSecPerKm,
+            avgSpeedKmh = avgSpeed,
+            isPartialLeg = true
+        )
+    }
+
+    if (rawSplits.size <= 1) {
+        return rawSplits.map { it.copy(isFastest = false) }
+    }
+
+    val candidates = rawSplits.filter { !it.isPartialLeg }.ifEmpty { rawSplits }
+    val fastestIdx = candidates.minByOrNull { it.paceSecondsPerKm }?.splitIndex
+    return rawSplits.map { split ->
+        split.copy(isFastest = split.splitIndex == fastestIdx)
+    }
+}
+
+private fun Double.roundToIntCompat(): Int = kotlin.math.round(this).toInt()
+
 private object OsmdroidMapInitializer {
     @Volatile
     private var configured = false

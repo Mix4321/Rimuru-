@@ -93,6 +93,12 @@ class SettingsViewModel(
         }
     }
 
+    fun setAutoPauseEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.updateSettings { it.copy(autoPauseEnabled = enabled) }
+        }
+    }
+
     fun setDetectionSensitivity(sensitivity: DetectionSensitivity) {
         viewModelScope.launch {
             settingsStore.updateSettings { it.copy(detectionSensitivity = sensitivity) }

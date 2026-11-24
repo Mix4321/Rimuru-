@@ -39,6 +39,7 @@ import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.GpsFixed
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.PauseCircle
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.RestartAlt
@@ -623,6 +624,15 @@ fun SettingsScreen(
                                 checked = settings.enableVoiceCoach,
                                 onCheckedChange = viewModel::setEnableVoiceCoach,
                                 testTag = "switch_voice_coach"
+                            )
+
+                            SettingsSwitchRow(
+                                icon = Icons.Rounded.PauseCircle,
+                                title = "หยุดจับเวลาอัตโนมัติเมื่อหยุดนิ่ง (Auto-Pause)",
+                                subtitle = "พักจับเวลาอัตโนมัติเมื่อติดไฟแดงหรือหยุดเดิน/วิ่งเกิน 5 วินาที และนับต่อเมื่อออกตัว",
+                                checked = settings.autoPauseEnabled,
+                                onCheckedChange = viewModel::setAutoPauseEnabled,
+                                testTag = "switch_auto_pause"
                             )
                         }
                     }

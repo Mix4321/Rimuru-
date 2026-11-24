@@ -71,7 +71,8 @@ data class AppSettings(
     val detectionSensitivity: DetectionSensitivity = DetectionSensitivity.BALANCED,
     val userHeightCm: Float = 170f,
     val autoNotifyWhenIdle: Boolean = true,
-    val enableVoiceCoach: Boolean = true
+    val enableVoiceCoach: Boolean = true,
+    val autoPauseEnabled: Boolean = true
 ) {
     val walkStrideMeters: Double get() = (userHeightCm / 100.0) * 0.415
     val runStrideMeters: Double get() = (userHeightCm / 100.0) * 0.585
@@ -89,6 +90,7 @@ class SettingsStore(private val context: Context) {
         val HEIGHT_CM = floatPreferencesKey("user_height_cm")
         val AUTO_NOTIFY_IDLE = booleanPreferencesKey("auto_notify_idle")
         val VOICE_COACH = booleanPreferencesKey("enable_voice_coach")
+        val AUTO_PAUSE_ENABLED = booleanPreferencesKey("auto_pause_enabled")
     }
 
     val settingsFlow: Flow<AppSettings> = context.appSettingsDataStore.data.map { prefs ->
@@ -101,7 +103,8 @@ class SettingsStore(private val context: Context) {
             detectionSensitivity = DetectionSensitivity.fromNameSafe(prefs[Keys.SENSITIVITY]),
             userHeightCm = (prefs[Keys.HEIGHT_CM] ?: 170f).coerceIn(120f, 220f),
             autoNotifyWhenIdle = prefs[Keys.AUTO_NOTIFY_IDLE] ?: true,
-            enableVoiceCoach = prefs[Keys.VOICE_COACH] ?: true
+            enableVoiceCoach = prefs[Keys.VOICE_COACH] ?: true,
+            autoPauseEnabled = prefs[Keys.AUTO_PAUSE_ENABLED] ?: true
         )
     }
 
@@ -116,7 +119,8 @@ class SettingsStore(private val context: Context) {
                 detectionSensitivity = DetectionSensitivity.fromNameSafe(prefs[Keys.SENSITIVITY]),
                 userHeightCm = (prefs[Keys.HEIGHT_CM] ?: 170f).coerceIn(120f, 220f),
                 autoNotifyWhenIdle = prefs[Keys.AUTO_NOTIFY_IDLE] ?: true,
-                enableVoiceCoach = prefs[Keys.VOICE_COACH] ?: true
+                enableVoiceCoach = prefs[Keys.VOICE_COACH] ?: true,
+                autoPauseEnabled = prefs[Keys.AUTO_PAUSE_ENABLED] ?: true
             )
             val updated = transform(current)
             prefs[Keys.THEME_MODE] = updated.themeMode.name
@@ -128,6 +132,7 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.HEIGHT_CM] = updated.userHeightCm.coerceIn(120f, 220f)
             prefs[Keys.AUTO_NOTIFY_IDLE] = updated.autoNotifyWhenIdle
             prefs[Keys.VOICE_COACH] = updated.enableVoiceCoach
+            prefs[Keys.AUTO_PAUSE_ENABLED] = updated.autoPauseEnabled
         }
     }
 

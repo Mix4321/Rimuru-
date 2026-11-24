@@ -1,8 +1,10 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -49,6 +51,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -57,6 +61,9 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.SportType
 import com.example.data.model.StretchingCatalog
 import com.example.data.model.TrackingMode
+import com.example.ui.components.StaggeredEntrance
+import com.example.ui.components.bounceClickable
+import com.example.ui.components.shimmerSweepEffect
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
 
@@ -116,12 +123,14 @@ fun SportSelectionScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(SportType.entries, key = { it.name }) { sport ->
-                SportGridCard(
-                    sport = sport,
-                    isSelected = readySport == sport,
-                    onClick = { readySport = sport }
-                )
+            itemsIndexed(SportType.entries, key = { _, it -> it.name }) { index, sport ->
+                StaggeredEntrance(index = index) {
+                    SportGridCard(
+                        sport = sport,
+                        isSelected = readySport == sport,
+                        onClick = { readySport = sport }
+                    )
+                }
             }
         }
     }
@@ -133,24 +142,53 @@ private fun SportGridCard(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    val containerColor by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        animationSpec = tween(durationMillis = 220),
+        label = "sport_card_bg"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+        animationSpec = tween(durationMillis = 220),
+        label = "sport_card_border"
+    )
+    val borderWidth by animateDpAsState(
+        targetValue = if (isSelected) 2.dp else 1.dp,
+        animationSpec = tween(durationMillis = 220),
+        label = "sport_card_border_w"
+    )
+
     Card(
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-        ),
-        border = if (isSelected) {
-            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
-        } else {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
-        },
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        border = BorderStroke(borderWidth, borderColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 4.dp else 2.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clip(RoundedCornerShape(24.dp))
+            .bounceClickable(onClick = onClick)
             .testTag("sport_card_${sport.name}")
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawBehind {
+                    val center = Offset(size.width * 0.88f, size.height * 0.14f)
+                    val radius = size.maxDimension * 0.6f
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                EmeraldVibrant.copy(alpha = if (isSelected) 0.18f else 0.08f),
+                                Color.Transparent
+                            ),
+                            center = center,
+                            radius = radius
+                        ),
+                        center = center,
+                        radius = radius
+                    )
+                }
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
@@ -396,6 +434,8 @@ private fun SportReadySheetContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(54.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .shimmerSweepEffect(shimmerAlpha = 0.16f, durationMillis = 2800)
                 .testTag("start_stretching_button")
         ) {
             Icon(Icons.Rounded.AccessibilityNew, contentDescription = null)

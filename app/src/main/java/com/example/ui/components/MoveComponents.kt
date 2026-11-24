@@ -2,7 +2,9 @@ package com.example.ui.components
 
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -56,8 +58,10 @@ import com.example.domain.ChartBarPoint
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
 import com.example.ui.theme.MintBright
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 @Composable
 fun DailyGoalRing(
@@ -70,8 +74,18 @@ fun DailyGoalRing(
 ) {
     val animatedSweep by animateFloatAsState(
         targetValue = (progressFraction.coerceIn(0f, 1f)) * 360f,
-        animationSpec = tween(durationMillis = 700, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 750, easing = FastOutSlowInEasing),
         label = "goal_ring_sweep"
+    )
+    val animatedPercent by animateIntAsState(
+        targetValue = progressPercent,
+        animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing),
+        label = "goal_percent_count"
+    )
+    val animatedMinutes by animateIntAsState(
+        targetValue = completedMinutes,
+        animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing),
+        label = "goal_minutes_count"
     )
 
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
@@ -98,6 +112,16 @@ fun DailyGoalRing(
             )
 
             if (animatedSweep > 0.5f) {
+                // Soft ambient halo behind active arc
+                drawArc(
+                    color = accentColor.copy(alpha = 0.2f),
+                    startAngle = -90f,
+                    sweepAngle = animatedSweep,
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = strokeWidth * 1.4f, cap = StrokeCap.Round)
+                )
                 drawArc(
                     brush = Brush.sweepGradient(
                         colors = listOf(primaryColor, EmeraldVibrant, accentColor, primaryColor)
@@ -109,13 +133,24 @@ fun DailyGoalRing(
                     size = arcSize,
                     style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
                 )
+
+                // Glowing tip beacon at the arc head
+                val tipRad = Math.toRadians((-90f + animatedSweep).toDouble())
+                val radius = arcSize.width / 2f
+                val cx = size.width / 2f + (radius * cos(tipRad)).toFloat()
+                val cy = size.height / 2f + (radius * sin(tipRad)).toFloat()
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.9f),
+                    radius = strokeWidth * 0.24f,
+                    center = Offset(cx, cy)
+                )
             }
         }
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             if (goalMinutes <= 0) {
                 Text(
-                    text = if (completedMinutes > 0) "${completedMinutes}น." else "อิสระ",
+                    text = if (animatedMinutes > 0) "${animatedMinutes}น." else "อิสระ",
                     style = MaterialTheme.typography.displaySmall,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold
@@ -127,13 +162,13 @@ fun DailyGoalRing(
                 )
             } else {
                 Text(
-                    text = "$progressPercent%",
+                    text = "$animatedPercent%",
                     style = MaterialTheme.typography.displayMedium,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "$completedMinutes / $goalMinutes นาที",
+                    text = "$animatedMinutes / $goalMinutes นาที",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -194,9 +229,23 @@ fun ActivityBarChart(
                             if (bar.minutes > 0) 8.dp.toPx() else 0f
                         )
                         if (filledH > 0f) {
+                            val topY = size.height - filledH
+                            val barBrush = if (bar.isCurrentPeriod) {
+                                Brush.verticalGradient(
+                                    colors = listOf(MintBright, activeColor),
+                                    startY = topY,
+                                    endY = size.height
+                                )
+                            } else {
+                                Brush.verticalGradient(
+                                    colors = listOf(EmeraldVibrant.copy(alpha = 0.72f), inactiveColor),
+                                    startY = topY,
+                                    endY = size.height
+                                )
+                            }
                             drawRoundRect(
-                                color = if (bar.isCurrentPeriod) activeColor else inactiveColor,
-                                topLeft = Offset(0f, size.height - filledH),
+                                brush = barBrush,
+                                topLeft = Offset(0f, topY),
                                 size = Size(size.width, filledH),
                                 cornerRadius = barRadius
                             )
@@ -238,6 +287,7 @@ fun MetricTile(
         shape = RoundedCornerShape(20.dp),
         color = containerColor,
         tonalElevation = 1.dp,
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.16f)),
         modifier = modifier
     ) {
         Column(
@@ -246,9 +296,16 @@ fun MetricTile(
         ) {
             Box(
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
-                    .background(accentColor.copy(alpha = 0.14f)),
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                accentColor.copy(alpha = 0.24f),
+                                accentColor.copy(alpha = 0.08f)
+                            )
+                        )
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(

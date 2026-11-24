@@ -1,5 +1,17 @@
 package com.example
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -50,12 +62,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.ui.components.auroraGlowBackdrop
+import com.example.ui.theme.MintBright
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -257,6 +272,16 @@ fun AppNavigation() {
 
 @Composable
 private fun AuthCheckingSplash() {
+    val pulseTransition = rememberInfiniteTransition(label = "splash_pulse")
+    val pulseScale by pulseTransition.animateFloat(
+        initialValue = 0.96f,
+        targetValue = 1.07f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "splash_icon_pulse"
+    )
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -264,7 +289,8 @@ private fun AuthCheckingSplash() {
                 Brush.verticalGradient(
                     colors = listOf(ForestGreenDeep, ForestGreenMedium, ForestGreen)
                 )
-            ),
+            )
+            .auroraGlowBackdrop(),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -274,14 +300,19 @@ private fun AuthCheckingSplash() {
             Surface(
                 shape = CircleShape,
                 color = Color.White.copy(alpha = 0.16f),
-                modifier = Modifier.size(76.dp)
+                modifier = Modifier
+                    .size(80.dp)
+                    .graphicsLayer {
+                        scaleX = pulseScale
+                        scaleY = pulseScale
+                    }
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.DirectionsRun,
                         contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(40.dp)
+                        tint = MintBright,
+                        modifier = Modifier.size(42.dp)
                     )
                 }
             }
@@ -404,13 +435,25 @@ private fun AuthenticatedMoveShell(
                                     TopLevelTab.SETTINGS -> it.hasRoute<SettingsRoute>()
                                 }
                             } == true
+                            val iconScale by animateFloatAsState(
+                                targetValue = if (selected) 1.14f else 1f,
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                    stiffness = Spring.StiffnessMedium
+                                ),
+                                label = "nav_icon_scale"
+                            )
                             NavigationBarItem(
                                 selected = selected,
                                 onClick = { navigateTopLevel(tab) },
                                 icon = {
                                     Icon(
                                         imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                        contentDescription = stringResource(tab.labelRes)
+                                        contentDescription = stringResource(tab.labelRes),
+                                        modifier = Modifier.graphicsLayer {
+                                            scaleX = iconScale
+                                            scaleY = iconScale
+                                        }
                                     )
                                 },
                                 label = { Text(stringResource(tab.labelRes)) },
@@ -459,13 +502,25 @@ private fun AuthenticatedMoveShell(
                                     TopLevelTab.SETTINGS -> it.hasRoute<SettingsRoute>()
                                 }
                             } == true
+                            val railScale by animateFloatAsState(
+                                targetValue = if (selected) 1.14f else 1f,
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                    stiffness = Spring.StiffnessMedium
+                                ),
+                                label = "rail_icon_scale"
+                            )
                             NavigationRailItem(
                                 selected = selected,
                                 onClick = { navigateTopLevel(tab) },
                                 icon = {
                                     Icon(
                                         imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                        contentDescription = stringResource(tab.labelRes)
+                                        contentDescription = stringResource(tab.labelRes),
+                                        modifier = Modifier.graphicsLayer {
+                                            scaleX = railScale
+                                            scaleY = railScale
+                                        }
                                     )
                                 },
                                 label = { Text(stringResource(tab.labelRes)) },
@@ -489,6 +544,20 @@ private fun AuthenticatedMoveShell(
                     NavHost(
                         navController = navController,
                         startDestination = DashboardRoute,
+                        enterTransition = {
+                            fadeIn(animationSpec = tween(220)) +
+                                scaleIn(initialScale = 0.97f, animationSpec = tween(220))
+                        },
+                        exitTransition = {
+                            fadeOut(animationSpec = tween(160))
+                        },
+                        popEnterTransition = {
+                            fadeIn(animationSpec = tween(220)) +
+                                scaleIn(initialScale = 0.98f, animationSpec = tween(220))
+                        },
+                        popExitTransition = {
+                            fadeOut(animationSpec = tween(160))
+                        },
                         modifier = Modifier
                             .fillMaxSize()
                             .widthIn(max = 1040.dp)

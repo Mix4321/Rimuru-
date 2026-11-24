@@ -84,6 +84,8 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
 import com.example.R
+import com.example.ui.components.auroraGlowBackdrop
+import com.example.ui.components.shimmerSweepEffect
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
 import com.example.ui.theme.ForestGreenDeep
@@ -293,6 +295,7 @@ fun AuthScreen(
                     )
                 )
             )
+            .auroraGlowBackdrop(primaryGlow = MintBright, secondaryGlow = EmeraldVibrant)
             .windowInsetsPadding(WindowInsets.safeDrawing),
         contentAlignment = Alignment.Center
     ) {
@@ -471,6 +474,8 @@ fun AuthScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(52.dp)
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .shimmerSweepEffect(enabled = !effectiveBusy, shimmerAlpha = 0.16f)
                                         .testTag("google_sign_in_button")
                                 ) {
                                     if (effectiveBusy) {
@@ -618,6 +623,8 @@ fun AuthScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(54.dp)
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .shimmerSweepEffect(enabled = !effectiveBusy, shimmerAlpha = 0.16f)
                                         .testTag("google_register_button")
                                 ) {
                                     if (effectiveBusy) {
@@ -703,6 +710,7 @@ fun AccountRegistrationScreen(
                     colors = listOf(ForestGreenDeep, ForestGreenMedium, MaterialTheme.colorScheme.background)
                 )
             )
+            .auroraGlowBackdrop(primaryGlow = MintBright, secondaryGlow = EmeraldVibrant)
             .windowInsetsPadding(WindowInsets.safeDrawing),
         contentAlignment = Alignment.Center
     ) {

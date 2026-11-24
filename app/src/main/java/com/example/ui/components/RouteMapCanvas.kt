@@ -43,8 +43,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.text.style.TextOverflow
 import com.example.data.model.RoutePoint
 import com.example.ui.theme.AmberWarm
+import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreenDeep
 import com.example.ui.theme.MintBright
 import kotlinx.serialization.json.Json
@@ -70,9 +79,12 @@ fun RouteMapCard(
     distanceMeters: Int,
     durationSeconds: Int,
     modifier: Modifier = Modifier,
-    mapHeight: Dp = 210.dp
+    mapHeight: Dp = 210.dp,
+    showSplitsTable: Boolean = true
 ) {
     if (routePoints.isEmpty()) return
+
+    val kmSplits = remember(routePoints) { computeDetailedKmSplits(routePoints) }
 
     var mapStyle by remember { mutableStateOf(MoveMapStyle.STREET) }
     var fitTriggerTick by remember { mutableIntStateOf(0) }
@@ -328,6 +340,188 @@ fun RouteMapCard(
                     fontWeight = FontWeight.Bold
                 )
             }
+
+            if (showSplitsTable && kmSplits.isNotEmpty()) {
+                KmSplitsBreakdownCard(splits = kmSplits)
+            }
         }
     }
+}
+
+@Composable
+fun KmSplitsBreakdownCard(
+    splits: List<KmSplitStat>,
+    modifier: Modifier = Modifier
+) {
+    if (splits.isEmpty()) return
+
+    var expanded by remember(splits.size) { mutableStateOf(false) }
+    val visibleSplits = if (expanded || splits.size <= 5) splits else splits.take(5)
+    val fastestPace = remember(splits) { splits.minOfOrNull { it.paceSecondsPerKm } ?: 300 }
+    val slowestPace = remember(splits) { splits.maxOfOrNull { it.paceSecondsPerKm } ?: fastestPace }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = Color.White.copy(alpha = 0.08f),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("km_splits_breakdown_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Speed,
+                        contentDescription = null,
+                        tint = MintBright,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "ตารางสปลิทแต่ละกิโลเมตร (${splits.size} ช่วง)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Text(
+                    text = "เร็วสุด ${formatPacePerKm(fastestPace)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MintBright,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            visibleSplits.forEach { split ->
+                val speedRatio = if (slowestPace <= fastestPace) {
+                    0.85f
+                } else {
+                    val normalized = (slowestPace - split.paceSecondsPerKm).toFloat() /
+                        (slowestPace - fastestPace).coerceAtLeast(1).toFloat()
+                    (0.35f + normalized * 0.65f).coerceIn(0.28f, 1f)
+                }
+                val barColor = when {
+                    split.isFastest -> MintBright
+                    split.isPartialLeg -> Color(0xFF38BDF8)
+                    speedRatio >= 0.65f -> EmeraldVibrant
+                    else -> AmberWarm
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = split.labelThai,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (split.isFastest) {
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = MintBright.copy(alpha = 0.22f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Bolt,
+                                            contentDescription = null,
+                                            tint = MintBright,
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Text(
+                                            text = "เร็วสุด",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MintBright,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = String.format(Locale.US, "%.1f กม./ชม.", split.avgSpeedKmh),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.72f)
+                            )
+                            Text(
+                                text = formatPacePerKm(split.paceSecondsPerKm),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (split.isFastest) MintBright else Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    LinearProgressIndicator(
+                        progress = { speedRatio },
+                        color = barColor,
+                        trackColor = Color.White.copy(alpha = 0.14f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                    )
+                }
+            }
+
+            if (splits.size > 5) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { expanded = !expanded }
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        contentDescription = null,
+                        tint = MintBright,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (expanded) "ซ่อนบางช่วง" else "ดูครบทั้ง ${splits.size} ช่วง",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MintBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatPacePerKm(secPerKm: Int): String {
+    val safe = secPerKm.coerceIn(1, 3599)
+    return String.format(Locale.US, "%d:%02d น./กม.", safe / 60, safe % 60)
 }

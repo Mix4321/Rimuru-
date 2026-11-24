@@ -1,10 +1,15 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -59,8 +64,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -77,7 +85,11 @@ import com.example.data.model.SportType
 import com.example.domain.DateStreakUtils
 import com.example.ui.components.DailyGoalRing
 import com.example.ui.components.GoalSettingDialog
+import com.example.ui.components.LivePulseBeacon
 import com.example.ui.components.MetricTile
+import com.example.ui.components.auroraGlowBackdrop
+import com.example.ui.components.bounceClickable
+import com.example.ui.components.shimmerSweepEffect
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
@@ -195,6 +207,10 @@ fun DashboardScreen(
                                     colors = listOf(ForestGreenDeep, ForestGreen, ForestGreenMedium)
                                 )
                             )
+                            .auroraGlowBackdrop(
+                                primaryGlow = MintBright,
+                                secondaryGlow = EmeraldVibrant
+                            )
                             .padding(20.dp)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -223,6 +239,11 @@ fun DashboardScreen(
                                                 verticalAlignment = Alignment.CenterVertically,
                                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                                             ) {
+                                                LivePulseBeacon(
+                                                    color = MintBright,
+                                                    isActive = true,
+                                                    size = 10.dp
+                                                )
                                                 Icon(
                                                     imageVector = Icons.Rounded.CloudDone,
                                                     contentDescription = null,
@@ -259,7 +280,7 @@ fun DashboardScreen(
                                     modifier = Modifier
                                         .size(50.dp)
                                         .clip(CircleShape)
-                                        .clickable { showProfileDialog = true }
+                                        .bounceClickable { showProfileDialog = true }
                                         .testTag("edit_profile_button")
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
@@ -281,6 +302,17 @@ fun DashboardScreen(
                                 }
                             }
 
+                            val fireTransition = rememberInfiniteTransition(label = "streak_fire_pulse")
+                            val fireScale by fireTransition.animateFloat(
+                                initialValue = 1f,
+                                targetValue = if (data.streak.hasCompletedToday) 1.12f else 1.04f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "fire_scale"
+                            )
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -289,6 +321,9 @@ fun DashboardScreen(
                                 Surface(
                                     shape = RoundedCornerShape(16.dp),
                                     color = Color.White.copy(alpha = 0.12f),
+                                    border = if (data.streak.hasCompletedToday) {
+                                        BorderStroke(1.dp, MintBright.copy(alpha = 0.38f))
+                                    } else null,
                                     modifier = Modifier.weight(1f)
                                 ) {
                                     Row(
@@ -300,7 +335,12 @@ fun DashboardScreen(
                                             imageVector = Icons.Rounded.LocalFireDepartment,
                                             contentDescription = "Streak",
                                             tint = if (data.streak.hasCompletedToday) MintBright else AmberWarm,
-                                            modifier = Modifier.size(22.dp)
+                                            modifier = Modifier
+                                                .size(22.dp)
+                                                .graphicsLayer {
+                                                    scaleX = fireScale
+                                                    scaleY = fireScale
+                                                }
                                         )
                                         Column {
                                             Row(
@@ -338,7 +378,7 @@ fun DashboardScreen(
                                     modifier = Modifier
                                         .weight(1f)
                                         .clip(RoundedCornerShape(16.dp))
-                                        .clickable(onClick = onOpenRecoveryPlanPage)
+                                        .bounceClickable(onClick = onOpenRecoveryPlanPage)
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -531,7 +571,8 @@ fun DashboardScreen(
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
                                 modifier = Modifier
                                     .width(126.dp)
-                                    .clickable { onQuickStartSport(sport) }
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .bounceClickable { onQuickStartSport(sport) }
                                     .testTag("quick_sport_${sport.name}")
                             ) {
                                 Row(
@@ -624,11 +665,28 @@ private fun TopicNavigationCard(
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
-        modifier = modifier.clickable(onClick = onClick)
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.2f)),
+        modifier = modifier
+            .clip(RoundedCornerShape(22.dp))
+            .bounceClickable(onClick = onClick)
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawBehind {
+                    val center = Offset(size.width * 0.92f, size.height * 0.1f)
+                    val radius = size.maxDimension * 0.65f
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(accentColor.copy(alpha = 0.12f), Color.Transparent),
+                            center = center,
+                            radius = radius
+                        ),
+                        center = center,
+                        radius = radius
+                    )
+                }
+                .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
@@ -799,14 +857,25 @@ private fun GoalStatRow(label: String, value: String) {
 
 @Composable
 private fun StartExerciseHeroCard(onStartExerciseClick: () -> Unit) {
+    val pulseTransition = rememberInfiniteTransition(label = "cta_play_pulse")
+    val playScale by pulseTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.09f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1300, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "play_icon_scale"
+    )
+
     Surface(
         shape = RoundedCornerShape(24.dp),
-        shadowElevation = 4.dp,
+        shadowElevation = 6.dp,
         modifier = Modifier
             .fillMaxWidth()
             .height(64.dp)
             .clip(RoundedCornerShape(24.dp))
-            .clickable(onClick = onStartExerciseClick)
+            .bounceClickable(pressedScale = 0.97f, onClick = onStartExerciseClick)
             .testTag("start_workout_cta")
     ) {
         Box(
@@ -816,7 +885,8 @@ private fun StartExerciseHeroCard(onStartExerciseClick: () -> Unit) {
                     Brush.horizontalGradient(
                         colors = listOf(ForestGreen, EmeraldVibrant)
                     )
-                ),
+                )
+                .shimmerSweepEffect(shimmerAlpha = 0.22f, durationMillis = 2500),
             contentAlignment = Alignment.Center
         ) {
             Row(
@@ -826,8 +896,12 @@ private fun StartExerciseHeroCard(onStartExerciseClick: () -> Unit) {
                 Box(
                     modifier = Modifier
                         .size(36.dp)
+                        .graphicsLayer {
+                            scaleX = playScale
+                            scaleY = playScale
+                        }
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.2f)),
+                        .background(Color.White.copy(alpha = 0.22f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -854,10 +928,14 @@ private fun GoalReachedBanner(goalMinutes: Int, completedMinutes: Int) {
     Card(
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        border = BorderStroke(1.dp, EmeraldVibrant.copy(alpha = 0.35f)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .shimmerSweepEffect(shimmerAlpha = 0.16f, durationMillis = 3200)
+                .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.AccessibilityNew
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.PauseCircle
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Share
@@ -45,15 +46,24 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -64,11 +74,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.SportType
+import com.example.data.model.TrackingMode
 import com.example.domain.DateStreakUtils
 import com.example.share.WorkoutShareHelper
+import com.example.ui.components.ConfettiCelebrationOverlay
 import com.example.ui.components.MetricTile
 import com.example.ui.components.RouteJsonCodec
 import com.example.ui.components.RouteMapCard
+import com.example.ui.components.auroraGlowBackdrop
+import com.example.ui.components.shimmerSweepEffect
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.EmeraldVibrant
 import com.example.ui.theme.ForestGreen
@@ -86,6 +100,7 @@ fun WorkoutAdvancedOptionsSheet(
     onSelectTimerStyle: (WorkoutTimerStyle) -> Unit,
     onApplyHiitPreset: (HiitPreset) -> Unit,
     onUpdateCustomHiit: (workSec: Int, restSec: Int, rounds: Int) -> Unit,
+    onToggleAutoPause: () -> Unit,
     onClose: () -> Unit
 ) {
     Column(
@@ -172,6 +187,52 @@ fun WorkoutAdvancedOptionsSheet(
             }
         }
 
+        if (uiState.sportType.supportsDistance && uiState.trackingMode == TrackingMode.SENSOR_GPS) {
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PauseCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Column {
+                            Text(
+                                text = "พักอัตโนมัติ (Auto-Pause)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "หยุดจับเวลาเมื่อยืนนิ่งเกิน 5 วินาที และเดินต่อทันทีเมื่อขยับตัว",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = uiState.autoPauseEnabled,
+                        onCheckedChange = { onToggleAutoPause() },
+                        modifier = Modifier.testTag("sheet_auto_pause_switch")
+                    )
+                }
+            }
+        }
+
         if (uiState.ghostRival.hasRival) {
             GhostPacerDuelCard(uiState = uiState)
         }
@@ -237,6 +298,7 @@ fun GhostPacerDuelCard(uiState: WorkoutUiState) {
                         colors = listOf(ForestGreenDeep, ForestGreen)
                     )
                 )
+                .auroraGlowBackdrop(primaryGlow = MintBright, secondaryGlow = EmeraldVibrant)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -300,7 +362,18 @@ fun PostWorkoutSummaryScreen(
     val outcome = uiState.saveOutcome!!
     val routePoints = remember(session.routeJson) { RouteJsonCodec.decode(session.routeJson) }
 
+    var badgeAppeared by remember(session.id) { mutableStateOf(false) }
+    val badgeScale by animateFloatAsState(
+        targetValue = if (badgeAppeared) 1f else 0.55f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "summary_badge_scale"
+    )
+
     LaunchedEffect(session.id) {
+        badgeAppeared = true
         MoveWidgetProvider.refreshAllWidgets(context)
     }
 
@@ -308,37 +381,63 @@ fun PostWorkoutSummaryScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .windowInsetsPadding(WindowInsets.safeDrawing),
         contentAlignment = Alignment.Center
     ) {
-        Card(
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-            modifier = Modifier.fillMaxWidth()
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Column(
-                modifier = Modifier.padding(22.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+            Card(
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.img_goal_badge),
-                    contentDescription = stringResource(R.string.goal_badge_desc),
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(86.dp)
-                        .clip(RoundedCornerShape(22.dp))
-                )
+                Column(
+                    modifier = Modifier.padding(22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(104.dp)
+                            .drawBehind {
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        colors = listOf(
+                                            MintBright.copy(alpha = 0.28f),
+                                            EmeraldVibrant.copy(alpha = 0.1f),
+                                            Color.Transparent
+                                        )
+                                    )
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.img_goal_badge),
+                            contentDescription = stringResource(R.string.goal_badge_desc),
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(86.dp)
+                                .graphicsLayer {
+                                    scaleX = badgeScale
+                                    scaleY = badgeScale
+                                }
+                                .clip(RoundedCornerShape(22.dp))
+                        )
+                    }
 
-                Text(
-                    text = "บันทึกกิจกรรมสำเร็จ!",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
+                    Text(
+                        text = "บันทึกกิจกรรมสำเร็จ!",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
 
                 Text(
                     text = "${session.sport.thaiName} • ${DateStreakUtils.formatMinutesThai(session.durationSeconds)}",
@@ -430,6 +529,8 @@ fun PostWorkoutSummaryScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .shimmerSweepEffect(shimmerAlpha = 0.18f, durationMillis = 2700)
                         .testTag("share_workout_button")
                 ) {
                     Icon(Icons.Rounded.Share, contentDescription = null)
@@ -471,5 +572,8 @@ fun PostWorkoutSummaryScreen(
                 }
             }
         }
+        }
+
+        ConfettiCelebrationOverlay(triggerKey = session.id)
     }
 }

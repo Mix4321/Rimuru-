@@ -3,9 +3,11 @@ package com.example
 import com.example.data.model.RoutePoint
 import com.example.ui.components.MoveMapStyle
 import com.example.ui.components.RouteJsonCodec
+import com.example.ui.components.computeDetailedKmSplits
 import com.example.ui.components.computeKmSplitMarkers
 import com.example.ui.components.haversineMeters
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -27,6 +29,57 @@ class RouteMapSplitTest {
         assertEquals(2, splits[1].kmNumber)
         assertTrue(splits[0].lat in p0.lat..p1.lat)
         assertTrue(splits[1].lat in p1.lat..p2.lat)
+    }
+
+    @Test
+    fun `computeDetailedKmSplits computes full km splits, trailing partial leg, and fastest badge`() {
+        // 0m -> ~1112m (400s, slower) -> ~2224m (700s, faster!) -> ~2557m (820s, trailing ~557m)
+        val points = listOf(
+            RoutePoint(lat = 13.7500, lng = 100.5000, speedKmh = 9.0f, elapsedSec = 0),
+            RoutePoint(lat = 13.7600, lng = 100.5000, speedKmh = 10.0f, elapsedSec = 400),
+            RoutePoint(lat = 13.7700, lng = 100.5000, speedKmh = 13.0f, elapsedSec = 700),
+            RoutePoint(lat = 13.7730, lng = 100.5000, speedKmh = 10.5f, elapsedSec = 820)
+        )
+
+        val splits = computeDetailedKmSplits(points)
+        assertEquals(3, splits.size)
+
+        // Split 1: full 1 km
+        assertEquals(1, splits[0].splitIndex)
+        assertFalse(splits[0].isPartialLeg)
+        assertEquals(1000, splits[0].segmentMeters)
+        assertFalse(splits[0].isFastest)
+
+        // Split 2: full 1 km and faster than split 1
+        assertEquals(2, splits[1].splitIndex)
+        assertFalse(splits[1].isPartialLeg)
+        assertEquals(1000, splits[1].segmentMeters)
+        assertTrue(splits[1].paceSecondsPerKm < splits[0].paceSecondsPerKm)
+        assertTrue(splits[1].isFastest)
+
+        // Split 3: trailing ~557m partial leg
+        assertEquals(3, splits[2].splitIndex)
+        assertTrue(splits[2].isPartialLeg)
+        assertTrue(splits[2].segmentMeters in 540..575)
+        assertFalse(splits[2].isFastest)
+    }
+
+    @Test
+    fun `computeDetailedKmSplits handles short distance below 1km and sub-100m threshold`() {
+        val shortValid = listOf(
+            RoutePoint(lat = 13.7500, lng = 100.5000, speedKmh = 6.0f, elapsedSec = 0),
+            RoutePoint(lat = 13.7520, lng = 100.5000, speedKmh = 6.0f, elapsedSec = 130) // ~222m
+        )
+        val shortSplits = computeDetailedKmSplits(shortValid)
+        assertEquals(1, shortSplits.size)
+        assertTrue(shortSplits[0].isPartialLeg)
+        assertTrue(shortSplits[0].segmentMeters in 215..230)
+
+        val tiny = listOf(
+            RoutePoint(lat = 13.7500, lng = 100.5000, speedKmh = 5.0f, elapsedSec = 0),
+            RoutePoint(lat = 13.7504, lng = 100.5000, speedKmh = 5.0f, elapsedSec = 30) // ~44m
+        )
+        assertTrue(computeDetailedKmSplits(tiny).isEmpty())
     }
 
     @Test

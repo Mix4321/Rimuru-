@@ -21,6 +21,8 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -62,6 +64,7 @@ import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PauseCircle
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Route
@@ -138,8 +141,14 @@ import com.example.data.model.TrackingMode
 import com.example.domain.DateStreakUtils
 import com.example.sensors.DeviceMotionTracker
 import com.example.sensors.LocationDistanceTracker
+import com.example.service.WorkoutLiveNotificationBus
+import com.example.service.WorkoutServiceSnapshot
+import com.example.service.WorkoutTrackingService
+import com.example.ui.components.LivePulseBeacon
 import com.example.ui.components.MoveMapStyle
 import com.example.ui.components.RealLiveTrackingMap
+import com.example.ui.components.bounceClickable
+import com.example.ui.components.shimmerSweepEffect
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.EmeraldVibrant
@@ -164,6 +173,13 @@ private fun checkLocationPermission(context: Context): Boolean =
 private fun checkActivityPermission(context: Context): Boolean =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED
+    } else {
+        true
+    }
+
+private fun checkNotificationPermission(context: Context): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     } else {
         true
     }
@@ -237,11 +253,58 @@ fun WorkoutScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        WorkoutLiveNotificationBus.togglePauseEvents.collect {
+            viewModel.togglePauseFromNotification()
+        }
+    }
+
+    LaunchedEffect(
+        uiState.sessionId,
+        uiState.sportType,
+        uiState.trackingMode,
+        uiState.locationPermissionGranted,
+        uiState.isRunning,
+        uiState.hasStartedOnce,
+        uiState.isAutoPaused,
+        uiState.autoPauseEnabled,
+        uiState.elapsedSeconds,
+        uiState.distanceMeters,
+        uiState.caloriesBurned,
+        uiState.saveOutcome
+    ) {
+        val shouldRunForegroundService = uiState.saveOutcome == null &&
+            uiState.trackingMode == TrackingMode.SENSOR_GPS &&
+            uiState.sportType.supportsDistance &&
+            uiState.locationPermissionGranted &&
+            (uiState.isRunning || uiState.hasStartedOnce)
+
+        if (shouldRunForegroundService) {
+            WorkoutTrackingService.syncState(
+                context = context,
+                snapshot = WorkoutServiceSnapshot(
+                    sessionId = uiState.sessionId,
+                    sportThaiName = uiState.sportType.thaiName,
+                    trackingMode = uiState.trackingMode,
+                    elapsedSeconds = uiState.elapsedSeconds,
+                    distanceMeters = uiState.distanceMeters,
+                    caloriesBurned = uiState.caloriesBurned,
+                    isRunning = uiState.isRunning,
+                    isAutoPaused = uiState.isAutoPaused,
+                    isAutoPauseEnabled = uiState.autoPauseEnabled
+                )
+            )
+        } else {
+            WorkoutTrackingService.stopService(context)
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             motionTracker.stop()
             locationTracker.stop()
             voiceCoach.shutdown()
+            WorkoutTrackingService.stopService(context)
         }
     }
 
@@ -304,6 +367,7 @@ fun WorkoutScreen(
         val cam = checkCameraPermission(context)
         val loc = checkLocationPermission(context)
         val act = checkActivityPermission(context)
+        val notif = checkNotificationPermission(context)
 
         val missingToRequest = buildList {
             if (uiState.trackingMode == TrackingMode.CAMERA_AI && !cam) {
@@ -316,6 +380,9 @@ fun WorkoutScreen(
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !act) {
                     add(Manifest.permission.ACTIVITY_RECOGNITION)
+                }
+                if (uiState.sportType.supportsDistance && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notif) {
+                    add(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
         }
@@ -412,6 +479,7 @@ fun WorkoutScreen(
                         showConfirmExitDialog = false
                         motionTracker.stop()
                         locationTracker.stop()
+                        WorkoutTrackingService.stopService(context)
                         viewModel.pauseTimer()
                         onExitToDashboard()
                     }
@@ -425,6 +493,7 @@ fun WorkoutScreen(
                         showConfirmExitDialog = false
                         motionTracker.stop()
                         locationTracker.stop()
+                        WorkoutTrackingService.stopService(context)
                         viewModel.discardAndClearSession()
                         onExitToDashboard()
                     }
@@ -447,6 +516,7 @@ fun WorkoutScreen(
                 onSelectTimerStyle = viewModel::setTimerStyle,
                 onApplyHiitPreset = viewModel::applyHiitPreset,
                 onUpdateCustomHiit = viewModel::updateCustomHiitConfig,
+                onToggleAutoPause = viewModel::toggleAutoPauseEnabled,
                 onClose = { showAdvancedOptionsSheet = false }
             )
         }
@@ -477,6 +547,9 @@ fun WorkoutScreen(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !uiState.activityPermissionGranted) {
                 add(Manifest.permission.ACTIVITY_RECOGNITION)
             }
+            if (uiState.sportType.supportsDistance && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !checkNotificationPermission(context)) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
         if (needed.isNotEmpty()) {
             multiPermissionLauncher.launch(needed.toTypedArray())
@@ -494,6 +567,7 @@ fun WorkoutScreen(
         if (uiState.canSaveWorkout) {
             motionTracker.stop()
             locationTracker.stop()
+            WorkoutTrackingService.stopService(context)
             viewModel.saveWorkout()
         } else {
             showBelowMinimumDialog = true
@@ -604,6 +678,9 @@ fun WorkoutScreen(
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !uiState.activityPermissionGranted) {
                                             add(Manifest.permission.ACTIVITY_RECOGNITION)
                                         }
+                                        if (uiState.sportType.supportsDistance && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !checkNotificationPermission(context)) {
+                                            add(Manifest.permission.POST_NOTIFICATIONS)
+                                        }
                                     }
                                     if (needed.isNotEmpty()) {
                                         multiPermissionLauncher.launch(needed.toTypedArray())
@@ -682,6 +759,7 @@ fun WorkoutScreen(
                         onToggleCameraLens = viewModel::toggleCameraLens,
                         onSelectManualEffort = viewModel::setManualEffort,
                         onRequestSensorPermissions = requestSensorPermissions,
+                        onToggleAutoPause = viewModel::toggleAutoPauseEnabled,
                         onOpenAppSettings = openAppSettings,
                         modifier = Modifier
                             .weight(1.1f)
@@ -722,6 +800,7 @@ fun WorkoutScreen(
                         onToggleCameraLens = viewModel::toggleCameraLens,
                         onSelectManualEffort = viewModel::setManualEffort,
                         onRequestSensorPermissions = requestSensorPermissions,
+                        onToggleAutoPause = viewModel::toggleAutoPauseEnabled,
                         onOpenAppSettings = openAppSettings,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -814,25 +893,56 @@ private fun PinnedLiveTelemetryDock(
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.testTag("workout_timer_text")
                                 )
+                                val statusPillBg by animateColorAsState(
+                                    targetValue = when {
+                                        uiState.isRunning && uiState.isAutoPaused -> AmberWarm.copy(alpha = 0.22f)
+                                        uiState.canSaveWorkout -> EmeraldVibrant.copy(alpha = 0.14f)
+                                        else -> MaterialTheme.colorScheme.surfaceContainerLow
+                                    },
+                                    animationSpec = tween(220),
+                                    label = "status_pill_bg"
+                                )
+                                val statusPillText by animateColorAsState(
+                                    targetValue = when {
+                                        uiState.isRunning && uiState.isAutoPaused -> AmberWarm
+                                        uiState.canSaveWorkout -> EmeraldVibrant
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    animationSpec = tween(220),
+                                    label = "status_pill_text"
+                                )
                                 Surface(
                                     shape = RoundedCornerShape(999.dp),
-                                    color = if (uiState.canSaveWorkout) {
-                                        EmeraldVibrant.copy(alpha = 0.14f)
+                                    color = statusPillBg,
+                                    modifier = if (uiState.isRunning && uiState.isAutoPaused) {
+                                        Modifier.testTag("auto_pause_status_pill")
                                     } else {
-                                        MaterialTheme.colorScheme.surfaceContainerLow
+                                        Modifier
                                     }
                                 ) {
-                                    Text(
-                                        text = if (uiState.canSaveWorkout) {
-                                            "บันทึกได้ทันที"
-                                        } else {
-                                            "${uiState.elapsedSeconds}/${DateStreakUtils.MIN_WORKOUT_SECONDS}วิ"
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        if (uiState.isRunning || uiState.canSaveWorkout) {
+                                            LivePulseBeacon(
+                                                color = if (uiState.isRunning && uiState.isAutoPaused) AmberWarm else EmeraldVibrant,
+                                                isActive = uiState.isRunning,
+                                                size = 9.dp
+                                            )
+                                        }
+                                        Text(
+                                            text = when {
+                                                uiState.isRunning && uiState.isAutoPaused -> "พักอัตโนมัติ • รอขยับตัว"
+                                                uiState.canSaveWorkout -> "บันทึกได้ทันที"
+                                                else -> "${uiState.elapsedSeconds}/${DateStreakUtils.MIN_WORKOUT_SECONDS}วิ"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = statusPillText,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -844,7 +954,7 @@ private fun PinnedLiveTelemetryDock(
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable {
+                            .bounceClickable {
                                 val nextStyle = if (uiState.timerStyle == WorkoutTimerStyle.FREE) {
                                     WorkoutTimerStyle.HIIT
                                 } else {
@@ -987,7 +1097,7 @@ private fun PinnedLiveTelemetryDock(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .clickable(onClick = onOpenOptionsSheet)
+                    .bounceClickable(onClick = onOpenOptionsSheet)
                     .testTag("ghost_pacer_card")
             ) {
                 Row(
@@ -1032,6 +1142,22 @@ private fun PinnedLiveTelemetryDock(
         }
 
         // Pinned Action Controls Row (Always at bottom — Zero Scroll)
+        val pauseResumeColor by animateColorAsState(
+            targetValue = if (uiState.isRunning) AmberWarm else ForestGreen,
+            animationSpec = tween(220),
+            label = "pause_resume_bg"
+        )
+        val finishBgColor by animateColorAsState(
+            targetValue = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.surfaceVariant,
+            animationSpec = tween(220),
+            label = "finish_bg"
+        )
+        val finishContentColor by animateColorAsState(
+            targetValue = if (uiState.canSaveWorkout) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+            animationSpec = tween(220),
+            label = "finish_fg"
+        )
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1040,9 +1166,7 @@ private fun PinnedLiveTelemetryDock(
                 onClick = onToggleRun,
                 enabled = !uiState.isSaving,
                 shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (uiState.isRunning) AmberWarm else ForestGreen
-                ),
+                colors = ButtonDefaults.buttonColors(containerColor = pauseResumeColor),
                 modifier = Modifier
                     .weight(1f)
                     .height(54.dp)
@@ -1069,12 +1193,18 @@ private fun PinnedLiveTelemetryDock(
                 enabled = !uiState.isSaving,
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (uiState.canSaveWorkout) EmeraldVibrant else MaterialTheme.colorScheme.surfaceVariant,
-                    contentColor = if (uiState.canSaveWorkout) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                    containerColor = finishBgColor,
+                    contentColor = finishContentColor
                 ),
                 modifier = Modifier
                     .weight(1f)
                     .height(54.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .shimmerSweepEffect(
+                        enabled = uiState.canSaveWorkout && !uiState.isSaving,
+                        shimmerAlpha = 0.18f,
+                        durationMillis = 2600
+                    )
                     .testTag("workout_finish_button")
             ) {
                 if (uiState.isSaving) {
@@ -1110,9 +1240,14 @@ private fun CompactStatPill(
     unit: String? = null,
     modifier: Modifier = Modifier
 ) {
+    val pillBg by animateColorAsState(
+        targetValue = if (highlighted) accent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerLow,
+        animationSpec = tween(220),
+        label = "stat_pill_bg"
+    )
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = if (highlighted) accent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerLow,
+        color = pillBg,
         border = if (highlighted) BorderStroke(1.dp, accent.copy(alpha = 0.45f)) else null,
         modifier = modifier
     ) {
@@ -1172,6 +1307,7 @@ private fun TrackingViewportCard(
     onToggleCameraLens: () -> Unit,
     onSelectManualEffort: (ManualEffortLevel) -> Unit,
     onRequestSensorPermissions: () -> Unit,
+    onToggleAutoPause: () -> Unit,
     onOpenAppSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1508,7 +1644,8 @@ private fun TrackingViewportCard(
             uiState.trackingMode == TrackingMode.SENSOR_GPS -> {
                 SensorGpsStatusContent(
                     uiState = uiState,
-                    onRequestPermissions = onRequestSensorPermissions
+                    onRequestPermissions = onRequestSensorPermissions,
+                    onToggleAutoPause = onToggleAutoPause
                 )
             }
 
@@ -1573,7 +1710,8 @@ private fun TrackingViewportCard(
 @Composable
 private fun SensorGpsStatusContent(
     uiState: WorkoutUiState,
-    onRequestPermissions: () -> Unit
+    onRequestPermissions: () -> Unit,
+    onToggleAutoPause: () -> Unit
 ) {
     val gps = uiState.gpsSnapshot
     val sensor = uiState.sensorSnapshot
@@ -1621,21 +1759,35 @@ private fun SensorGpsStatusContent(
                     verticalArrangement = Arrangement.spacedBy(5.dp),
                     modifier = Modifier.weight(1f)
                 ) {
+                    val gpsPillBg by animateColorAsState(
+                        targetValue = when {
+                            uiState.isRunning && uiState.isAutoPaused -> AmberWarm.copy(alpha = 0.94f)
+                            uiState.isRunning && uiState.isCurrentlyMoving -> EmeraldVibrant.copy(alpha = 0.92f)
+                            else -> ForestGreenDeep.copy(alpha = 0.86f)
+                        },
+                        animationSpec = tween(220),
+                        label = "gps_pill_bg"
+                    )
                     Surface(
                         shape = RoundedCornerShape(999.dp),
-                        color = if (uiState.isRunning && uiState.isCurrentlyMoving) {
-                            EmeraldVibrant.copy(alpha = 0.92f)
-                        } else {
-                            ForestGreenDeep.copy(alpha = 0.86f)
-                        }
+                        color = gpsPillBg
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
+                            LivePulseBeacon(
+                                color = if (uiState.isRunning && uiState.isAutoPaused) Color.White else MintBright,
+                                isActive = uiState.isRunning,
+                                size = 10.dp
+                            )
                             Icon(
-                                imageVector = Icons.Rounded.Sensors,
+                                imageVector = if (uiState.isRunning && uiState.isAutoPaused) {
+                                    Icons.Rounded.PauseCircle
+                                } else {
+                                    Icons.Rounded.Sensors
+                                },
                                 contentDescription = null,
                                 tint = Color.White,
                                 modifier = Modifier.size(15.dp)
@@ -1644,6 +1796,7 @@ private fun SensorGpsStatusContent(
                                 text = when {
                                     !uiState.isRunning && !uiState.hasStartedOnce -> "พร้อมบันทึกเส้นทางบนแผนที่"
                                     !uiState.isRunning -> "หยุดชั่วคราว"
+                                    uiState.isAutoPaused -> "พักอัตโนมัติ (หยุดนิ่ง)"
                                     uiState.isCurrentlyMoving -> "กำลัง${uiState.sportType.thaiName}จริง"
                                     else -> "นิ่งอยู่ — เริ่มออกตัวได้เลย"
                                 },
@@ -1802,11 +1955,26 @@ private fun SensorGpsStatusContent(
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.Bold
                                 )
-                                Text(
-                                    text = mapStyle.thaiLabel,
-                                    color = Color.White.copy(alpha = 0.72f),
-                                    style = MaterialTheme.typography.labelSmall
-                                )
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (uiState.autoPauseEnabled) {
+                                        MintBright.copy(alpha = 0.2f)
+                                    } else {
+                                        Color.White.copy(alpha = 0.12f)
+                                    },
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .bounceClickable(onClick = onToggleAutoPause)
+                                        .testTag("hud_auto_pause_toggle")
+                                ) {
+                                    Text(
+                                        text = if (uiState.autoPauseEnabled) "Auto-Pause: เปิด" else "Auto-Pause: ปิด",
+                                        color = if (uiState.autoPauseEnabled) MintBright else Color.White.copy(alpha = 0.72f),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
                             }
                             LinearProgressIndicator(
                                 progress = { uiState.currentIntensity.coerceIn(0f, 1f) },
@@ -1849,6 +2017,11 @@ private fun SensorGpsStatusContent(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    LivePulseBeacon(
+                        color = MintBright,
+                        isActive = uiState.isRunning,
+                        size = 10.dp
+                    )
                     Icon(
                         imageVector = Icons.Rounded.Sensors,
                         contentDescription = null,
