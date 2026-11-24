@@ -1,5 +1,6 @@
 package com.example.data.remote
 
+import com.example.BuildConfig
 import com.example.data.model.SportType
 import com.example.ui.components.haversineMeters
 import kotlinx.coroutines.Dispatchers
@@ -12,11 +13,18 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
@@ -73,7 +81,12 @@ data class WorkoutSpot(
     val feeInfoThai: String? = null,
     val accessThai: String? = null,
     val sportBadgesThai: List<String> = emptyList(),
-    val operatorName: String? = null
+    val operatorName: String? = null,
+    val rating: Double? = null,
+    val userRatingCount: Int? = null,
+    val isOpenNow: Boolean? = null,
+    val googleMapsUri: String? = null,
+    val sourceName: String = "OpenStreetMap"
 )
 
 data class NavigationStep(
@@ -109,9 +122,21 @@ data class CombinedPlaceSearchResult(
     val areaSuggestions: List<SearchPlaceSuggestion>
 )
 
-class NearbySpotsRepository {
+class NearbySpotsRepository(
+    private val googleMapsApiKeyProvider: () -> String = { BuildConfig.GOOGLE_MAPS_API_KEY }
+) {
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    fun isGoogleMapsKeyConfigured(): Boolean {
+        val key = runCatching { googleMapsApiKeyProvider() }.getOrDefault("").trim()
+        return key.isNotBlank() && key != PLACEHOLDER_GOOGLE_MAPS_KEY
+    }
+
+    private fun resolvedGoogleMapsApiKey(): String? {
+        val key = runCatching { googleMapsApiKeyProvider() }.getOrDefault("").trim()
+        return key.takeIf { it.isNotBlank() && it != PLACEHOLDER_GOOGLE_MAPS_KEY }
+    }
 
     private data class CachedSpotsEntry(
         val lat: Double,
@@ -172,9 +197,9 @@ class NearbySpotsRepository {
     }
 
     /**
-     * Fetches real exercise spots from OpenStreetMap Overpass mirrors and Komoot Photon in parallel,
-     * emitting progressive partial results as soon as the fastest source finishes (typically ~1s)
-     * and racing Overpass mirrors concurrently to eliminate long sequential waits.
+     * Fetches real exercise spots prioritizing Google Maps Places API when GOOGLE_MAPS_API_KEY is
+     * configured in AI Studio Secrets, and falls back smoothly to OpenStreetMap / Photon when
+     * unconfigured or unavailable.
      */
     suspend fun fetchNearbySpots(
         userLat: Double,
@@ -188,6 +213,27 @@ class NearbySpotsRepository {
                 findCachedSpots(userLat, userLng, radiusMeters)?.let { cached ->
                     return@runCatching cached
                 }
+            }
+
+            val googleApiKey = resolvedGoogleMapsApiKey()
+            var googleError: Throwable? = null
+            if (googleApiKey != null) {
+                val googleResult = runCatching {
+                    fetchNearbyViaGooglePlaces(
+                        lat = userLat,
+                        lng = userLng,
+                        radiusMeters = radiusMeters,
+                        apiKey = googleApiKey,
+                        onPartialSpots = onPartialSpots
+                    )
+                }
+                val googleSpots = googleResult.getOrNull().orEmpty()
+                if (googleSpots.isNotEmpty()) {
+                    val sortedGoogle = googleSpots.sortedBy { it.distanceMeters }
+                    storeCachedSpots(userLat, userLng, radiusMeters, sortedGoogle)
+                    return@runCatching sortedGoogle
+                }
+                googleError = googleResult.exceptionOrNull()
             }
 
             val collectedByKey = LinkedHashMap<String, WorkoutSpot>()
@@ -280,7 +326,7 @@ class NearbySpotsRepository {
             }
 
             if (collectedByKey.isEmpty()) {
-                throw (overpassError ?: photonError
+                throw (googleError ?: overpassError ?: photonError
                     ?: IllegalStateException("ไม่สามารถรวบรวมสถานที่ใกล้คุณได้"))
             }
 
@@ -309,6 +355,34 @@ class NearbySpotsRepository {
 
             val refLat = originLat ?: DEFAULT_THAILAND_LAT
             val refLng = originLng ?: DEFAULT_THAILAND_LNG
+
+            val googleApiKey = resolvedGoogleMapsApiKey()
+            if (googleApiKey != null) {
+                val googleSpots = runCatching {
+                    searchGooglePlacesText(
+                        query = clean,
+                        originLat = refLat,
+                        originLng = refLng,
+                        apiKey = googleApiKey
+                    )
+                }.getOrNull().orEmpty()
+                if (googleSpots.isNotEmpty()) {
+                    val suggestions = googleSpots.take(5).map { spot ->
+                        SearchPlaceSuggestion(
+                            displayName = spot.addressSummary?.let { "${spot.name}, $it" } ?: spot.name,
+                            shortName = spot.name,
+                            lat = spot.lat,
+                            lng = spot.lng,
+                            category = spot.category,
+                            detailLabel = spot.categoryDetailThai
+                        )
+                    }
+                    return@runCatching CombinedPlaceSearchResult(
+                        spots = googleSpots.sortedBy { it.distanceMeters },
+                        areaSuggestions = suggestions
+                    )
+                }
+            }
 
             coroutineScope {
                 val photonDeferred = async {
@@ -425,6 +499,34 @@ class NearbySpotsRepository {
         destLng: Double,
         travelMode: TravelMode
     ): Result<NavigationRouteResult> = withContext(Dispatchers.IO) {
+        val googleApiKey = resolvedGoogleMapsApiKey()
+        if (googleApiKey != null) {
+            val googleMode = when (travelMode) {
+                TravelMode.WALK -> "walking"
+                TravelMode.BIKE -> "bicycling"
+                TravelMode.DRIVE -> "driving"
+            }
+            val googleRoute = withTimeoutOrNull(4_500L) {
+                runCatching {
+                    val url = String.format(
+                        Locale.US,
+                        "https://maps.googleapis.com/maps/api/directions/json?origin=%.6f,%.6f&destination=%.6f,%.6f&mode=%s&language=th&key=%s",
+                        originLat,
+                        originLng,
+                        destLat,
+                        destLng,
+                        googleMode,
+                        URLEncoder.encode(googleApiKey, "UTF-8")
+                    )
+                    val raw = getUrl(url, connectMs = 3_000, readMs = 4_000)
+                    parseGoogleDirectionsRoute(rawJson = raw, travelMode = travelMode)
+                }.getOrNull()
+            }
+            if (googleRoute != null) {
+                return@withContext Result.success(googleRoute)
+            }
+        }
+
         val candidateUrls = listOf(
             String.format(
                 Locale.US,
@@ -1228,6 +1330,560 @@ class NearbySpotsRepository {
         }
     }
 
+    private suspend fun fetchNearbyViaGooglePlaces(
+        lat: Double,
+        lng: Double,
+        radiusMeters: Int,
+        apiKey: String,
+        onPartialSpots: (suspend (List<WorkoutSpot>) -> Unit)? = null
+    ): List<WorkoutSpot> = coroutineScope {
+        val circleRadius = if (radiusMeters > 0) {
+            radiusMeters.coerceIn(500, 50_000).toDouble()
+        } else {
+            35_000.0
+        }
+        val textBiasRadius = if (radiusMeters <= 0) 50_000.0 else circleRadius
+        val maxAllowedDist = if (radiusMeters > 0) radiusMeters + 500 else MAX_QUERY_RADIUS_METERS
+
+        val batch1Job = async {
+            runCatching {
+                val body = buildGoogleNearbySearchBody(
+                    lat = lat,
+                    lng = lng,
+                    radiusMeters = circleRadius,
+                    includedTypes = listOf("fitness_center", "gym", "park", "swimming_pool", "hiking_area")
+                )
+                val raw = postJson(
+                    urlString = "https://places.googleapis.com/v1/places:searchNearby",
+                    jsonBody = body,
+                    headers = googlePlacesNewHeaders(apiKey)
+                )
+                parseGooglePlacesNewSpots(raw, lat, lng)
+            }
+        }
+
+        val batch2Job = async {
+            runCatching {
+                val body = buildGoogleNearbySearchBody(
+                    lat = lat,
+                    lng = lng,
+                    radiusMeters = circleRadius,
+                    includedTypes = listOf("sports_club", "sports_complex", "stadium", "athletic_field", "golf_course", "bowling_alley")
+                )
+                val raw = postJson(
+                    urlString = "https://places.googleapis.com/v1/places:searchNearby",
+                    jsonBody = body,
+                    headers = googlePlacesNewHeaders(apiKey)
+                )
+                parseGooglePlacesNewSpots(raw, lat, lng)
+            }
+        }
+
+        val textBatchJob = async {
+            runCatching {
+                val body = buildGoogleTextSearchBody(
+                    query = "สวนสาธารณะ ฟิตเนส ยิม สนามกีฬา สนามแบดมินตัน สระว่ายน้ำ โยคะ มวยไทย",
+                    lat = lat,
+                    lng = lng,
+                    radiusMeters = textBiasRadius
+                )
+                val raw = postJson(
+                    urlString = "https://places.googleapis.com/v1/places:searchText",
+                    jsonBody = body,
+                    headers = googlePlacesNewHeaders(apiKey)
+                )
+                parseGooglePlacesNewSpots(raw, lat, lng)
+            }
+        }
+
+        val collected = LinkedHashMap<String, WorkoutSpot>()
+        val r1 = batch1Job.await()
+        r1.getOrNull()?.filter { it.distanceMeters <= maxAllowedDist }?.forEach { spot ->
+            collected.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+        }
+        if (collected.isNotEmpty()) {
+            onPartialSpots?.invoke(collected.values.sortedBy { it.distanceMeters })
+        }
+
+        val r2 = batch2Job.await()
+        val r3 = textBatchJob.await()
+        listOf(r2, r3).forEach { res ->
+            res.getOrNull()?.filter { it.distanceMeters <= maxAllowedDist }?.forEach { spot ->
+                collected.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+            }
+        }
+
+        if (collected.isNotEmpty()) {
+            return@coroutineScope collected.values.sortedBy { it.distanceMeters }
+        }
+
+        // Classic Google Places API fallback (in case key uses Places API instead of Places API New)
+        val legacyRadius = circleRadius.roundToInt().coerceIn(500, 50_000)
+        val legacyParkJob = async {
+            runCatching {
+                val url = String.format(
+                    Locale.US,
+                    "https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=%.6f,%.6f&radius=%d&type=park&language=th&key=%s",
+                    lat, lng, legacyRadius, URLEncoder.encode(apiKey, "UTF-8")
+                )
+                parseGooglePlacesLegacySpots(getUrl(url, connectMs = 3_500, readMs = 5_000), lat, lng)
+            }
+        }
+        val legacyFitnessJob = async {
+            runCatching {
+                val url = String.format(
+                    Locale.US,
+                    "https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=%.6f,%.6f&radius=%d&keyword=%s&language=th&key=%s",
+                    lat, lng, legacyRadius, URLEncoder.encode("fitness gym sports swimming yoga", "UTF-8"), URLEncoder.encode(apiKey, "UTF-8")
+                )
+                parseGooglePlacesLegacySpots(getUrl(url, connectMs = 3_500, readMs = 5_000), lat, lng)
+            }
+        }
+        val lp = legacyParkJob.await()
+        val lf = legacyFitnessJob.await()
+        listOf(lp, lf).forEach { res ->
+            res.getOrNull()?.filter { it.distanceMeters <= maxAllowedDist }?.forEach { spot ->
+                collected.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+            }
+        }
+
+        if (collected.isEmpty()) {
+            val err = r1.exceptionOrNull() ?: r2.exceptionOrNull() ?: r3.exceptionOrNull()
+                ?: lp.exceptionOrNull() ?: lf.exceptionOrNull()
+            if (err != null) throw err
+        }
+        collected.values.sortedBy { it.distanceMeters }
+    }
+
+    private suspend fun searchGooglePlacesText(
+        query: String,
+        originLat: Double,
+        originLng: Double,
+        apiKey: String
+    ): List<WorkoutSpot> {
+        val newAttempt = runCatching {
+            val body = buildGoogleTextSearchBody(
+                query = query,
+                lat = originLat,
+                lng = originLng,
+                radiusMeters = 50_000.0
+            )
+            val raw = postJson(
+                urlString = "https://places.googleapis.com/v1/places:searchText",
+                jsonBody = body,
+                headers = googlePlacesNewHeaders(apiKey)
+            )
+            parseGooglePlacesNewSpots(raw, originLat, originLng)
+        }
+        val newList = newAttempt.getOrNull().orEmpty()
+        if (newList.isNotEmpty()) return newList
+
+        // Classic Places Text Search fallback
+        val encodedQ = URLEncoder.encode(query, "UTF-8")
+        val legacyUrl = String.format(
+            Locale.US,
+            "https://maps.googleapis.com/maps/api/place/textsearch/json?query=%s&location=%.6f,%.6f&radius=50000&language=th&key=%s",
+            encodedQ, originLat, originLng, URLEncoder.encode(apiKey, "UTF-8")
+        )
+        return runCatching {
+            parseGooglePlacesLegacySpots(getUrl(legacyUrl, connectMs = 3_500, readMs = 5_000), originLat, originLng)
+        }.getOrElse {
+            if (newAttempt.isFailure) throw newAttempt.exceptionOrNull()!!
+            emptyList()
+        }
+    }
+
+    private fun googlePlacesNewHeaders(apiKey: String): Map<String, String> = mapOf(
+        "X-Goog-Api-Key" to apiKey,
+        "X-Goog-FieldMask" to "places.id,places.displayName,places.formattedAddress,places.shortFormattedAddress,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.regularOpeningHours,places.currentOpeningHours,places.nationalPhoneNumber,places.websiteUri,places.googleMapsUri"
+    )
+
+    private fun buildGoogleNearbySearchBody(
+        lat: Double,
+        lng: Double,
+        radiusMeters: Double,
+        includedTypes: List<String>
+    ): String = buildJsonObject {
+        putJsonArray("includedTypes") {
+            includedTypes.forEach { add(it) }
+        }
+        put("maxResultCount", 20)
+        put("rankPreference", "DISTANCE")
+        put("languageCode", "th")
+        putJsonObject("locationRestriction") {
+            putJsonObject("circle") {
+                putJsonObject("center") {
+                    put("latitude", lat)
+                    put("longitude", lng)
+                }
+                put("radius", radiusMeters)
+            }
+        }
+    }.toString()
+
+    private fun buildGoogleTextSearchBody(
+        query: String,
+        lat: Double,
+        lng: Double,
+        radiusMeters: Double
+    ): String = buildJsonObject {
+        put("textQuery", query)
+        put("pageSize", 20)
+        put("languageCode", "th")
+        putJsonObject("locationBias") {
+            putJsonObject("circle") {
+                putJsonObject("center") {
+                    put("latitude", lat)
+                    put("longitude", lng)
+                }
+                put("radius", radiusMeters)
+            }
+        }
+    }.toString()
+
+    internal fun parseGooglePlacesNewSpots(
+        rawJson: String,
+        originLat: Double,
+        originLng: Double
+    ): List<WorkoutSpot> {
+        val root = json.parseToJsonElement(rawJson).jsonObject
+        val places = root["places"]?.jsonArray ?: return emptyList()
+        val seenKeys = HashSet<String>()
+        val result = mutableListOf<WorkoutSpot>()
+
+        for (el in places) {
+            val obj = el as? JsonObject ?: continue
+            val name = obj["displayName"]?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull?.trim()
+                ?.takeIf { it.isNotBlank() } ?: continue
+            val locObj = obj["location"]?.jsonObject ?: continue
+            val lat = locObj["latitude"]?.jsonPrimitive?.doubleOrNull ?: continue
+            val lng = locObj["longitude"]?.jsonPrimitive?.doubleOrNull ?: continue
+
+            val dedupKey = dedupKeyFor(name, lat, lng)
+            if (!seenKeys.add(dedupKey)) continue
+
+            val placeId = obj["id"]?.jsonPrimitive?.contentOrNull ?: dedupKey.hashCode().toString()
+            val primaryType = obj["primaryType"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val primaryDisplay = obj["primaryTypeDisplayName"]?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull
+            val types = obj["types"]?.jsonArray
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                .orEmpty()
+
+            val classification = classifyGooglePlace(
+                primaryType = primaryType,
+                types = types,
+                name = name,
+                primaryDisplayNameThai = primaryDisplay
+            )
+            val dist = haversineMeters(originLat, originLng, lat, lng).roundToInt().coerceAtLeast(1)
+
+            val address = (obj["shortFormattedAddress"]?.jsonPrimitive?.contentOrNull
+                ?: obj["formattedAddress"]?.jsonPrimitive?.contentOrNull)
+                ?.trim()?.takeIf { it.isNotBlank() }
+
+            val rating = obj["rating"]?.jsonPrimitive?.doubleOrNull
+            val reviewCount = obj["userRatingCount"]?.jsonPrimitive?.intOrNull
+            val currentHours = obj["currentOpeningHours"]?.jsonObject
+            val regularHours = obj["regularOpeningHours"]?.jsonObject
+            val isOpenNow = currentHours?.get("openNow")?.jsonPrimitive?.booleanOrNull
+                ?: regularHours?.get("openNow")?.jsonPrimitive?.booleanOrNull
+            val weekdayDesc = (currentHours?.get("weekdayDescriptions")?.jsonArray
+                ?: regularHours?.get("weekdayDescriptions")?.jsonArray)
+                ?.firstOrNull()?.jsonPrimitive?.contentOrNull
+                ?.substringAfter(":")?.trim()
+                ?.takeIf { it.isNotBlank() }
+
+            val phone = obj["nationalPhoneNumber"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val website = obj["websiteUri"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val mapsUri = obj["googleMapsUri"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                ?: "https://www.google.com/maps/search/?api=1&query=$lat,$lng&query_place_id=$placeId"
+
+            result += WorkoutSpot(
+                id = "gm_$placeId",
+                name = name,
+                category = classification.category,
+                categoryDetailThai = classification.detailLabel,
+                lat = lat,
+                lng = lng,
+                distanceMeters = dist,
+                addressSummary = address,
+                openingHours = weekdayDesc,
+                sportTags = (listOf(primaryType) + types).filter { it.isNotBlank() }.distinct().joinToString(",").takeIf { it.isNotBlank() },
+                suggestedSport = classification.suggestedSport,
+                phone = phone,
+                website = website,
+                sportBadgesThai = extractGoogleSportBadgesThai(primaryType, types, name),
+                rating = rating,
+                userRatingCount = reviewCount,
+                isOpenNow = isOpenNow,
+                googleMapsUri = mapsUri,
+                sourceName = "Google Maps"
+            )
+        }
+        return result.sortedBy { it.distanceMeters }
+    }
+
+    internal fun parseGooglePlacesLegacySpots(
+        rawJson: String,
+        originLat: Double,
+        originLng: Double
+    ): List<WorkoutSpot> {
+        val root = json.parseToJsonElement(rawJson).jsonObject
+        val status = root["status"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val results = root["results"]?.jsonArray ?: JsonArray(emptyList())
+        if (status.isNotBlank() && status != "OK" && status != "ZERO_RESULTS" && results.isEmpty()) {
+            val errMsg = root["error_message"]?.jsonPrimitive?.contentOrNull ?: status
+            throw IllegalStateException("Google Places: $errMsg")
+        }
+
+        val seenKeys = HashSet<String>()
+        val list = mutableListOf<WorkoutSpot>()
+        for (el in results) {
+            val obj = el as? JsonObject ?: continue
+            val name = obj["name"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotBlank() } ?: continue
+            val loc = obj["geometry"]?.jsonObject?.get("location")?.jsonObject ?: continue
+            val lat = loc["lat"]?.jsonPrimitive?.doubleOrNull ?: continue
+            val lng = loc["lng"]?.jsonPrimitive?.doubleOrNull ?: continue
+            val dedupKey = dedupKeyFor(name, lat, lng)
+            if (!seenKeys.add(dedupKey)) continue
+
+            val placeId = obj["place_id"]?.jsonPrimitive?.contentOrNull ?: dedupKey.hashCode().toString()
+            val types = obj["types"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
+            val classification = classifyGooglePlace(
+                primaryType = types.firstOrNull().orEmpty(),
+                types = types,
+                name = name,
+                primaryDisplayNameThai = null
+            )
+            val dist = haversineMeters(originLat, originLng, lat, lng).roundToInt().coerceAtLeast(1)
+            val address = (obj["vicinity"]?.jsonPrimitive?.contentOrNull
+                ?: obj["formatted_address"]?.jsonPrimitive?.contentOrNull)?.trim()?.takeIf { it.isNotBlank() }
+            val rating = obj["rating"]?.jsonPrimitive?.doubleOrNull
+            val reviewCount = obj["user_ratings_total"]?.jsonPrimitive?.intOrNull
+            val isOpenNow = obj["opening_hours"]?.jsonObject?.get("open_now")?.jsonPrimitive?.booleanOrNull
+
+            list += WorkoutSpot(
+                id = "gml_$placeId",
+                name = name,
+                category = classification.category,
+                categoryDetailThai = classification.detailLabel,
+                lat = lat,
+                lng = lng,
+                distanceMeters = dist,
+                addressSummary = address,
+                suggestedSport = classification.suggestedSport,
+                sportBadgesThai = extractGoogleSportBadgesThai(types.firstOrNull().orEmpty(), types, name),
+                rating = rating,
+                userRatingCount = reviewCount,
+                isOpenNow = isOpenNow,
+                googleMapsUri = "https://www.google.com/maps/search/?api=1&query=$lat,$lng&query_place_id=$placeId",
+                sourceName = "Google Maps"
+            )
+        }
+        return list.sortedBy { it.distanceMeters }
+    }
+
+    internal fun parseGoogleDirectionsRoute(
+        rawJson: String,
+        travelMode: TravelMode
+    ): NavigationRouteResult? {
+        val root = json.parseToJsonElement(rawJson).jsonObject
+        val status = root["status"]?.jsonPrimitive?.contentOrNull
+        if (status != "OK") return null
+
+        val routes = root["routes"]?.jsonArray ?: return null
+        val firstRoute = routes.firstOrNull()?.jsonObject ?: return null
+        val overviewEncoded = firstRoute["overview_polyline"]?.jsonObject
+            ?.get("points")?.jsonPrimitive?.contentOrNull.orEmpty()
+        val decoded = decodeGooglePolyline(overviewEncoded)
+        val polyline = downsamplePolyline(decoded, maxPoints = 350)
+        if (polyline.size < 2) return null
+
+        val legs = firstRoute["legs"]?.jsonArray ?: JsonArray(emptyList())
+        var totalDistance = 0
+        var totalDuration = 0
+        val steps = mutableListOf<NavigationStep>()
+        var stepIndex = 1
+
+        for (legEl in legs) {
+            val legObj = legEl as? JsonObject ?: continue
+            totalDistance += legObj["distance"]?.jsonObject?.get("value")?.jsonPrimitive?.intOrNull ?: 0
+            totalDuration += legObj["duration"]?.jsonObject?.get("value")?.jsonPrimitive?.intOrNull ?: 0
+            val legSteps = legObj["steps"]?.jsonArray ?: continue
+            for (stepEl in legSteps) {
+                val stepObj = stepEl as? JsonObject ?: continue
+                val stepDist = stepObj["distance"]?.jsonObject?.get("value")?.jsonPrimitive?.intOrNull ?: 0
+                val stepDur = stepObj["duration"]?.jsonObject?.get("value")?.jsonPrimitive?.intOrNull ?: 0
+                val rawHtml = stepObj["html_instructions"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val cleanInstr = stripHtmlTags(rawHtml).ifBlank { "ตรงไปตามเส้นทาง" }
+                val maneuverRaw = stepObj["maneuver"]?.jsonPrimitive?.contentOrNull
+                val startLoc = stepObj["start_location"]?.jsonObject
+                val sLat = startLoc?.get("lat")?.jsonPrimitive?.doubleOrNull ?: polyline.first().lat
+                val sLng = startLoc?.get("lng")?.jsonPrimitive?.doubleOrNull ?: polyline.first().lng
+                val (mType, mMod) = mapGoogleManeuver(maneuverRaw)
+
+                steps += NavigationStep(
+                    index = stepIndex++,
+                    instructionThai = cleanInstr,
+                    streetName = "",
+                    distanceMeters = stepDist,
+                    durationSeconds = stepDur,
+                    maneuverType = mType,
+                    maneuverModifier = mMod,
+                    location = GeoCoord(lat = sLat, lng = sLng)
+                )
+            }
+        }
+
+        val finalDistance = totalDistance.coerceAtLeast(1)
+        val adjustedDuration = adjustRealisticDuration(finalDistance, totalDuration, travelMode)
+        return NavigationRouteResult(
+            travelMode = travelMode,
+            totalDistanceMeters = finalDistance,
+            durationSeconds = adjustedDuration,
+            polyline = polyline,
+            steps = steps
+        )
+    }
+
+    internal fun decodeGooglePolyline(encoded: String): List<GeoCoord> {
+        if (encoded.isEmpty()) return emptyList()
+        val poly = mutableListOf<GeoCoord>()
+        var index = 0
+        val len = encoded.length
+        var lat = 0
+        var lng = 0
+
+        while (index < len) {
+            var b: Int
+            var shift = 0
+            var result = 0
+            do {
+                if (index >= len) return poly
+                b = encoded[index++].code - 63
+                result = result or ((b and 0x1f) shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            val dLat = if ((result and 1) != 0) (result shr 1).inv() else (result shr 1)
+            lat += dLat
+
+            shift = 0
+            result = 0
+            do {
+                if (index >= len) return poly
+                b = encoded[index++].code - 63
+                result = result or ((b and 0x1f) shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            val dLng = if ((result and 1) != 0) (result shr 1).inv() else (result shr 1)
+            lng += dLng
+
+            poly += GeoCoord(lat = lat / 1E5, lng = lng / 1E5)
+        }
+        return poly
+    }
+
+    private fun stripHtmlTags(raw: String): String = raw
+        .replace(Regex("<div[^>]*>"), " • ")
+        .replace(Regex("<[^>]*>"), " ")
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
+    private fun mapGoogleManeuver(raw: String?): Pair<String, String?> = when (raw?.lowercase(Locale.ROOT)) {
+        null -> "continue" to null
+        "turn-left" -> "turn" to "left"
+        "turn-sharp-left" -> "turn" to "sharp left"
+        "turn-slight-left", "keep-left", "ramp-left", "fork-left" -> "turn" to "slight left"
+        "turn-right" -> "turn" to "right"
+        "turn-sharp-right" -> "turn" to "sharp right"
+        "turn-slight-right", "keep-right", "ramp-right", "fork-right" -> "turn" to "slight right"
+        "uturn-left", "uturn-right" -> "turn" to "uturn"
+        "roundabout-left", "roundabout-right" -> "roundabout" to null
+        "merge" -> "merge" to null
+        else -> "continue" to null
+    }
+
+    private fun classifyGooglePlace(
+        primaryType: String,
+        types: List<String>,
+        name: String,
+        primaryDisplayNameThai: String?
+    ): SpotClassification {
+        val allTypes = (listOf(primaryType) + types).map { it.lowercase(Locale.ROOT) }.toSet()
+        val lowerName = name.lowercase(Locale.ROOT)
+        val cleanDisplay = primaryDisplayNameThai?.takeIf { it.isNotBlank() }
+
+        val category = when {
+            "swimming_pool" in allTypes || lowerName.contains("สระ") || lowerName.contains("ว่ายน้ำ") || lowerName.contains("swim") || lowerName.contains("pool") ->
+                NearbySpotCategory.SWIMMING
+            "yoga_studio" in allTypes || "martial_arts_school" in allTypes ||
+                lowerName.contains("โยคะ") || lowerName.contains("yoga") || lowerName.contains("pilates") ||
+                lowerName.contains("มวย") || lowerName.contains("muay") || lowerName.contains("boxing") ||
+                lowerName.contains("เทควันโด") || lowerName.contains("คาราเต้") || lowerName.contains("เต้น") ->
+                NearbySpotCategory.MARTIAL_WELLNESS
+            "golf_course" in allTypes || "hiking_area" in allTypes || "ice_skating_rink" in allTypes ||
+                lowerName.contains("จักรยาน") || lowerName.contains("สเก็ต") || lowerName.contains("ปีนผา") ||
+                lowerName.contains("bike") || lowerName.contains("cycling") || lowerName.contains("climb") ->
+                NearbySpotCategory.CYCLING_OUTDOOR
+            "fitness_center" in allTypes || "gym" in allTypes ||
+                lowerName.contains("ฟิตเนส") || lowerName.contains("ยิม") || lowerName.contains("fitness") ||
+                lowerName.contains("gym") || lowerName.contains("crossfit") || lowerName.contains("jetts") ||
+                lowerName.contains("virgin active") ->
+                NearbySpotCategory.FITNESS_GYM
+            "park" in allTypes || "national_park" in allTypes || "playground" in allTypes ||
+                lowerName.contains("สวนสาธารณะ") || lowerName.contains("สวน") || lowerName.contains("ลู่วิ่ง") ||
+                lowerName.contains("park") ->
+                NearbySpotCategory.PARK_RUN
+            "sports_club" in allTypes || "sports_complex" in allTypes || "stadium" in allTypes ||
+                "athletic_field" in allTypes || "bowling_alley" in allTypes ||
+                lowerName.contains("สนาม") || lowerName.contains("แบด") || lowerName.contains("badminton") ||
+                lowerName.contains("บาส") || lowerName.contains("ฟุตบอล") || lowerName.contains("เทนนิส") ->
+                NearbySpotCategory.SPORTS_COURT
+            else -> inferCategoryFromText(name)
+        }
+
+        val detail = cleanDisplay ?: when (category) {
+            NearbySpotCategory.SWIMMING -> "สระว่ายน้ำ / ศูนย์กีฬาทางน้ำ"
+            NearbySpotCategory.MARTIAL_WELLNESS -> "มวย / โยคะ / สตูดิโอ"
+            NearbySpotCategory.CYCLING_OUTDOOR -> "ปั่นจักรยาน / กิจกรรมกลางแจ้ง"
+            NearbySpotCategory.FITNESS_GYM -> "ฟิตเนส / ยิม"
+            NearbySpotCategory.PARK_RUN -> "สวนสาธารณะ / ลู่วิ่ง"
+            NearbySpotCategory.SPORTS_COURT, NearbySpotCategory.ALL -> "สนามกีฬา / คลับกีฬา"
+        }
+
+        return SpotClassification(
+            category = category,
+            detailLabel = detail,
+            fallbackName = detail,
+            suggestedSport = inferSportFromCategory(category, name)
+        )
+    }
+
+    private fun extractGoogleSportBadgesThai(
+        primaryType: String,
+        types: List<String>,
+        name: String
+    ): List<String> {
+        val allTypes = (listOf(primaryType) + types).map { it.lowercase(Locale.ROOT) }
+        val lower = name.lowercase(Locale.ROOT)
+        return buildList {
+            if ("fitness_center" in allTypes || "gym" in allTypes || lower.contains("fitness") || lower.contains("ฟิตเนส")) add("ฟิตเนส/เวท")
+            if ("park" in allTypes || lower.contains("สวน") || lower.contains("park") || lower.contains("วิ่ง")) add("วิ่ง/เดินออกกำลัง")
+            if ("swimming_pool" in allTypes || lower.contains("ว่ายน้ำ") || lower.contains("swim")) add("ว่ายน้ำ")
+            if (lower.contains("แบด") || lower.contains("badminton")) add("แบดมินตัน")
+            if (lower.contains("เทนนิส") || lower.contains("tennis")) add("เทนนิส")
+            if (lower.contains("บาส") || lower.contains("basketball")) add("บาสเกตบอล")
+            if (lower.contains("บอล") || lower.contains("football") || lower.contains("futsal")) add("ฟุตบอล/ฟุตซอล")
+            if (lower.contains("มวย") || lower.contains("muay") || lower.contains("boxing")) add("มวยไทย/มวยสากล")
+            if (lower.contains("โยคะ") || lower.contains("yoga") || lower.contains("pilates")) add("โยคะ/พิลาทิส")
+            if ("stadium" in allTypes || "sports_complex" in allTypes || "sports_club" in allTypes) add("สนาม/ศูนย์กีฬา")
+        }.distinct().take(4)
+    }
+
     private fun getUrl(
         urlString: String,
         connectMs: Int = 5_000,
@@ -1265,6 +1921,30 @@ class NearbySpotsRepository {
         return readHttpResponse(conn)
     }
 
+    private fun postJson(
+        urlString: String,
+        jsonBody: String,
+        headers: Map<String, String> = emptyMap(),
+        connectMs: Int = 4_000,
+        readMs: Int = 6_000
+    ): String {
+        val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = connectMs
+            readTimeout = readMs
+            setRequestProperty("User-Agent", "MoveActivityTracker/1.0 (Android)")
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+            setRequestProperty("Accept", "application/json")
+            headers.forEach { (k, v) -> setRequestProperty(k, v) }
+        }
+        OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(jsonBody)
+            writer.flush()
+        }
+        return readHttpResponse(conn)
+    }
+
     private fun readHttpResponse(conn: HttpURLConnection): String {
         try {
             val code = conn.responseCode
@@ -1283,6 +1963,7 @@ class NearbySpotsRepository {
 
     companion object {
         const val UNLIMITED_RADIUS_METERS = 0
+        private const val PLACEHOLDER_GOOGLE_MAPS_KEY = "MY_GOOGLE_MAPS_API_KEY"
         private const val MAX_QUERY_RADIUS_METERS = 150_000
         private const val CACHE_TTL_MS = 10 * 60 * 1000L
         private const val CACHE_MATCH_DISTANCE_METERS = 650.0

@@ -334,4 +334,141 @@ class NearbySpotsParsingTest {
         assertEquals(NearbySpotCategory.PARK_RUN, filtered[1].category)
         assertEquals("ถนนพระราม 4, ปทุมวัน", filtered[1].addressSummary)
     }
+
+    @Test
+    fun isGoogleMapsKeyConfigured_validatesPlaceholderAndBlankKeys() {
+        val unconfiguredPlaceholder = NearbySpotsRepository { "MY_GOOGLE_MAPS_API_KEY" }
+        val unconfiguredBlank = NearbySpotsRepository { "   " }
+        val configured = NearbySpotsRepository { "AIzaSyFakeTestKey123456" }
+
+        assertEquals(false, unconfiguredPlaceholder.isGoogleMapsKeyConfigured())
+        assertEquals(false, unconfiguredBlank.isGoogleMapsKeyConfigured())
+        assertEquals(true, configured.isGoogleMapsKeyConfigured())
+    }
+
+    @Test
+    fun parseGooglePlacesNewSpots_extractsRatingsOpeningHoursAndCategories() {
+        val sampleNewJson = """
+            {
+              "places": [
+                {
+                  "id": "ChIJ_park_1",
+                  "displayName": { "text": "สวนเบญจกิติ", "languageCode": "th" },
+                  "shortFormattedAddress": "ถนนรัชดาภิเษก, คลองเตย",
+                  "location": { "latitude": 13.7294, "longitude": 100.5582 },
+                  "primaryType": "park",
+                  "primaryTypeDisplayName": { "text": "สวนสาธารณะ", "languageCode": "th" },
+                  "types": ["park"],
+                  "rating": 4.8,
+                  "userRatingCount": 12450,
+                  "currentOpeningHours": {
+                    "openNow": true,
+                    "weekdayDescriptions": ["วันจันทร์: 04:30–21:00"]
+                  },
+                  "googleMapsUri": "https://maps.google.com/?cid=111"
+                },
+                {
+                  "id": "ChIJ_gym_2",
+                  "displayName": { "text": "Fitness First Platinum", "languageCode": "en" },
+                  "formattedAddress": "สาทร, กรุงเทพฯ",
+                  "location": { "latitude": 13.7210, "longitude": 100.5290 },
+                  "primaryType": "fitness_center",
+                  "types": ["fitness_center", "gym"],
+                  "rating": 4.5,
+                  "userRatingCount": 320,
+                  "regularOpeningHours": { "openNow": false },
+                  "nationalPhoneNumber": "02-111-2222",
+                  "websiteUri": "https://www.fitnessfirst.co.th"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val spots = repo.parseGooglePlacesNewSpots(sampleNewJson, 13.7200, 100.5280)
+        assertEquals(2, spots.size)
+
+        val gym = spots[0]
+        assertEquals("Fitness First Platinum", gym.name)
+        assertEquals(NearbySpotCategory.FITNESS_GYM, gym.category)
+        assertEquals("Google Maps", gym.sourceName)
+        assertEquals(4.5, gym.rating!!, 0.01)
+        assertEquals(320, gym.userRatingCount)
+        assertEquals(false, gym.isOpenNow)
+        assertEquals("02-111-2222", gym.phone)
+
+        val park = spots[1]
+        assertEquals("สวนเบญจกิติ", park.name)
+        assertEquals(NearbySpotCategory.PARK_RUN, park.category)
+        assertEquals("สวนสาธารณะ", park.categoryDetailThai)
+        assertEquals(true, park.isOpenNow)
+        assertEquals("04:30–21:00", park.openingHours)
+        assertEquals("https://maps.google.com/?cid=111", park.googleMapsUri)
+    }
+
+    @Test
+    fun parseGooglePlacesLegacySpots_parsesResultsAndGoogleUri() {
+        val sampleLegacy = """
+            {
+              "status": "OK",
+              "results": [
+                {
+                  "place_id": "ChIJ_swim_1",
+                  "name": "สระว่ายน้ำจุฬาลงกรณ์",
+                  "vicinity": "ปทุมวัน, กรุงเทพฯ",
+                  "geometry": { "location": { "lat": 13.7380, "lng": 100.5270 } },
+                  "types": ["swimming_pool"],
+                  "rating": 4.6,
+                  "user_ratings_total": 190,
+                  "opening_hours": { "open_now": true }
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val spots = repo.parseGooglePlacesLegacySpots(sampleLegacy, 13.7350, 100.5250)
+        assertEquals(1, spots.size)
+        assertEquals(NearbySpotCategory.SWIMMING, spots[0].category)
+        assertEquals("Google Maps", spots[0].sourceName)
+        assertEquals(4.6, spots[0].rating!!, 0.01)
+        assertEquals(true, spots[0].isOpenNow)
+        assertTrue(spots[0].googleMapsUri!!.contains("ChIJ_swim_1"))
+    }
+
+    @Test
+    fun parseGoogleDirectionsRoute_decodesPolylineAndStripsHtmlSteps() {
+        val sampleDirections = """
+            {
+              "status": "OK",
+              "routes": [
+                {
+                  "overview_polyline": { "points": "_p~iF~ps|U_ulLnnqC_mqNvxq`@" },
+                  "legs": [
+                    {
+                      "distance": { "value": 950 },
+                      "duration": { "value": 700 },
+                      "steps": [
+                        {
+                          "distance": { "value": 950 },
+                          "duration": { "value": 700 },
+                          "html_instructions": "เลี้ยวซ้ายเข้าสู่ <b>ถนนพระราม 4</b>",
+                          "maneuver": "turn-left",
+                          "start_location": { "lat": 38.5, "lng": -120.2 }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val route = repo.parseGoogleDirectionsRoute(sampleDirections, TravelMode.WALK)
+        assertNotNull(route)
+        assertEquals(950, route!!.totalDistanceMeters)
+        assertEquals(3, route.polyline.size)
+        assertEquals(38.5, route.polyline[0].lat, 0.001)
+        assertEquals(-120.2, route.polyline[0].lng, 0.001)
+        assertEquals("เลี้ยวซ้ายเข้าสู่ ถนนพระราม 4", route.steps[0].instructionThai)
+        assertEquals("left", route.steps[0].maneuverModifier)
+    }
 }

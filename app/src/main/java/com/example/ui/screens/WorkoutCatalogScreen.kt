@@ -102,7 +102,7 @@ fun WorkoutCatalogScreen(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "GREEN PULSE WORKOUTS",
+                    text = "MOVE WORKOUTS",
                     style = MaterialTheme.typography.labelSmall,
                     color = NeonLime,
                     fontWeight = FontWeight.Bold

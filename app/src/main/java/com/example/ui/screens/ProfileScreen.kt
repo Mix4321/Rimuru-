@@ -756,7 +756,7 @@ fun ProfileScreen(
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
-                                    onClick = { exportJsonLauncher.launch("green_pulse_backup_${System.currentTimeMillis() / 1000}.json") },
+                                    onClick = { exportJsonLauncher.launch("move_backup_${System.currentTimeMillis() / 1000}.json") },
                                     shape = RoundedCornerShape(16.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = EmeraldPulse,
@@ -778,7 +778,7 @@ fun ProfileScreen(
                                     Text("JSON", maxLines = 1, fontWeight = FontWeight.ExtraBold)
                                 }
                                 OutlinedButton(
-                                    onClick = { exportCsvLauncher.launch("green_pulse_workouts_${System.currentTimeMillis() / 1000}.csv") },
+                                    onClick = { exportCsvLauncher.launch("move_workouts_${System.currentTimeMillis() / 1000}.csv") },
                                     shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier.weight(1f).testTag("export_csv_button")
                                 ) {

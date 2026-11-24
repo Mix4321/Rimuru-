@@ -333,7 +333,7 @@ fun AuthScreen(
                     }
                 }
                 Text(
-                    text = "GREEN PULSE",
+                    text = "MOVE",
                     style = MaterialTheme.typography.headlineLarge,
                     color = Color.White,
                     fontWeight = FontWeight.ExtraBold

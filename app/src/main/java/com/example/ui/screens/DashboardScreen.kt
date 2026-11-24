@@ -221,7 +221,7 @@ fun DashboardScreen(
                                 ) {
                                     LivePulseBeacon(color = NeonLime, isActive = true, size = 8.dp)
                                     Text(
-                                        text = "GREEN PULSE • $greetingLabel",
+                                        text = "MOVE • $greetingLabel",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = NeonLime,
                                         fontWeight = FontWeight.Bold

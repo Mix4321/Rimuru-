@@ -333,7 +333,7 @@ private fun AuthCheckingSplash() {
                 }
             }
             Text(
-                text = "GREEN PULSE",
+                text = "MOVE",
                 style = MaterialTheme.typography.headlineLarge,
                 color = Color.White,
                 fontWeight = FontWeight.ExtraBold
@@ -519,12 +519,12 @@ private fun AuthenticatedGreenPulseShell(
                         Spacer(modifier = Modifier.size(12.dp))
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.DirectionsRun,
-                            contentDescription = "Green Pulse",
+                            contentDescription = "Move",
                             tint = NeonLime,
                             modifier = Modifier.size(28.dp)
                         )
                         Text(
-                            text = "PULSE",
+                            text = "MOVE",
                             style = MaterialTheme.typography.labelSmall,
                             color = NeonLime,
                             fontWeight = FontWeight.ExtraBold
@@ -875,7 +875,7 @@ private fun DashboardStateContent(
                 ) {
                     CircularProgressIndicator(color = NeonLime)
                     Text(
-                        text = "กำลังโหลดข้อมูล Green Pulse...",
+                        text = "กำลังโหลดข้อมูล Move...",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color.White.copy(alpha = 0.78f)
                     )

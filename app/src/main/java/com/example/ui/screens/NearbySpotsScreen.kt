@@ -59,6 +59,7 @@ import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SportsBasketball
 import androidx.compose.material.icons.rounded.SportsMartialArts
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Straight
 import androidx.compose.material.icons.rounded.TurnLeft
 import androidx.compose.material.icons.rounded.TurnRight
@@ -335,6 +336,49 @@ private fun NearbyHeaderControls(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                val usingGoogleSpots = uiState.filteredSpots.any { it.sourceName == "Google Maps" } ||
+                    uiState.allSpots.any { it.sourceName == "Google Maps" }
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (usingGoogleSpots || uiState.isGoogleMapsKeyConfigured) {
+                        EmeraldVibrant.copy(alpha = 0.14f)
+                    } else {
+                        AmberWarm.copy(alpha = 0.14f)
+                    },
+                    border = BorderStroke(
+                        1.dp,
+                        if (usingGoogleSpots || uiState.isGoogleMapsKeyConfigured) {
+                            EmeraldVibrant.copy(alpha = 0.4f)
+                        } else {
+                            AmberWarm.copy(alpha = 0.4f)
+                        }
+                    ),
+                    modifier = Modifier.padding(top = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Map,
+                            contentDescription = null,
+                            tint = if (usingGoogleSpots || uiState.isGoogleMapsKeyConfigured) EmeraldVibrant else AmberWarm,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = when {
+                                usingGoogleSpots -> "สถานที่จาก Google Maps Places"
+                                uiState.isGoogleMapsKeyConfigured -> "พร้อมดึงสถานที่จาก Google Maps Places"
+                                else -> "ใช้แผนที่สำรอง (ใส่ GOOGLE_MAPS_API_KEY ใน Secrets เพื่อใช้ Google Maps)"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -944,6 +988,59 @@ private fun SelectedSpotNavigationCard(
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.SemiBold
                         )
+                        if (spot.rating != null || spot.isOpenNow != null || spot.sourceName == "Google Maps") {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(top = 2.dp)
+                            ) {
+                                if (spot.rating != null) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Star,
+                                            contentDescription = null,
+                                            tint = AmberWarm,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = buildString {
+                                                append(String.format(java.util.Locale.US, "%.1f", spot.rating))
+                                                if (spot.userRatingCount != null && spot.userRatingCount > 0) {
+                                                    append(" (${spot.userRatingCount})")
+                                                }
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                                if (spot.isOpenNow != null) {
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = if (spot.isOpenNow) EmeraldVibrant.copy(alpha = 0.16f) else AmberWarm.copy(alpha = 0.16f)
+                                    ) {
+                                        Text(
+                                            text = if (spot.isOpenNow) "เปิดอยู่" else "ปิดแล้ว",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (spot.isOpenNow) EmeraldVibrant else AmberWarm,
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                if (spot.sourceName == "Google Maps") {
+                                    Text(
+                                        text = "Google Maps",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
                 IconButton(onClick = onClear, modifier = Modifier.size(40.dp)) {
@@ -961,7 +1058,8 @@ private fun SelectedSpotNavigationCard(
                 !spot.accessThai.isNullOrBlank() ||
                 !spot.operatorName.isNullOrBlank() ||
                 !spot.phone.isNullOrBlank() ||
-                !spot.website.isNullOrBlank()
+                !spot.website.isNullOrBlank() ||
+                spot.rating != null
 
             if (hasRichDetails) {
                 Surface(
@@ -1649,6 +1747,33 @@ private fun NearbySpotRowCard(
                             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                         )
                     }
+                    if (spot.rating != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Star,
+                                contentDescription = null,
+                                tint = AmberWarm,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = String.format(java.util.Locale.US, "%.1f", spot.rating),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                    if (spot.isOpenNow != null) {
+                        Text(
+                            text = if (spot.isOpenNow) "เปิดอยู่" else "ปิดอยู่",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (spot.isOpenNow) EmeraldVibrant else AmberWarm
+                        )
+                    }
                     Text(
                         text = spot.categoryDetailThai,
                         style = MaterialTheme.typography.bodySmall,
@@ -1759,7 +1884,8 @@ private fun launchExternalNavigation(
         "geo:${spot.lat},${spot.lng}?q=${spot.lat},${spot.lng}(${Uri.encode(spot.name)})"
     )
     val webFallbackUri = Uri.parse(
-        "https://www.google.com/maps/dir/?api=1&destination=${spot.lat},${spot.lng}&travelmode=${travelMode.osrmProfile}"
+        spot.googleMapsUri
+            ?: "https://www.google.com/maps/dir/?api=1&destination=${spot.lat},${spot.lng}&travelmode=${travelMode.osrmProfile}"
     )
     runCatching {
         context.startActivity(googleIntent)

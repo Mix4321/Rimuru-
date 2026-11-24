@@ -73,7 +73,8 @@ data class NearbySpotsUiState(
     val followUserOnMap: Boolean = true,
     val mapStyle: MoveMapStyle = MoveMapStyle.STREET,
     val fitRouteTick: Int = 0,
-    val recenterTick: Int = 0
+    val recenterTick: Int = 0,
+    val isGoogleMapsKeyConfigured: Boolean = false
 ) {
     val activeCenterLat: Double? get() = searchCenterLat ?: userLat
     val activeCenterLng: Double? get() = searchCenterLng ?: userLng
@@ -116,6 +117,7 @@ class NearbySpotsViewModel(
     }
 
     init {
+        _uiState.update { it.copy(isGoogleMapsKeyConfigured = repository.isGoogleMapsKeyConfigured()) }
         refreshPermissionAndLocationState()
     }
 
