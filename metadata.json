@@ -1,6 +1,6 @@
 {
-  "name": "MOVE",
-  "description": "แอปติดตามการออกกำลังกายและกิจกรรมกีฬาอัจฉริยะ พร้อมระบบตรวจจับการเคลื่อนไหว เป้าหมายรายวัน และระบบ Streak",
+  "name": "Green Pulse",
+  "description": "GREEN PULSE — Train Hard. Live Strong. แอปฟิตเนสและติดตามการออกกำลังกายอัจฉริยะระดับโปร พร้อมกล้อง AI ระบบนำทางสถานที่ออกกำลังกาย แผนฝึก Strength/Cardio/HIIT/Yoga และวิเคราะห์สถิติเชิงลึก",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

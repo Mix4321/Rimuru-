@@ -1,12 +1,6 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -32,25 +26,22 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.CloudDone
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.LocalFireDepartment
-import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Route
-import androidx.compose.material.icons.rounded.Schedule
-import androidx.compose.material.icons.rounded.SportsHandball
+import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -65,40 +56,39 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import com.example.R
 import com.example.data.model.ActiveWorkoutDraft
 import com.example.data.model.SportType
+import com.example.data.model.WorkoutCatalog
+import com.example.data.model.WorkoutProgram
 import com.example.domain.DateStreakUtils
-import com.example.ui.components.DailyGoalRing
+import com.example.ui.components.GlassPulseCard
 import com.example.ui.components.GoalSettingDialog
 import com.example.ui.components.LivePulseBeacon
-import com.example.ui.components.MetricTile
+import com.example.ui.components.MultiActivityRings
+import com.example.ui.components.NeonPulseButton
 import com.example.ui.components.auroraGlowBackdrop
 import com.example.ui.components.bounceClickable
-import com.example.ui.components.shimmerSweepEffect
-import com.example.ui.theme.AmberWarm
-import com.example.ui.theme.EmeraldVibrant
-import com.example.ui.theme.ForestGreen
-import com.example.ui.theme.ForestGreenDeep
-import com.example.ui.theme.ForestGreenMedium
-import com.example.ui.theme.MintBright
+import com.example.ui.theme.DeepForestGreen
+import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.EmeraldPulse
+import com.example.ui.theme.GlassBorderEmerald
+import com.example.ui.theme.NeonLime
+import com.example.ui.theme.ObsidianBlack
+import com.example.ui.theme.ObsidianElevated
 import com.example.ui.viewmodel.DashboardData
 import com.example.widget.MoveWidgetProvider
+import java.util.Calendar
 
 @Composable
 fun DashboardScreen(
@@ -107,6 +97,7 @@ fun DashboardScreen(
     userPhotoUrl: String? = null,
     onStartExerciseClick: () -> Unit,
     onQuickStartSport: (SportType) -> Unit,
+    onOpenProgramDetail: (WorkoutProgram) -> Unit = {},
     onUpdateDailyGoal: (Int) -> Unit,
     onUpdateProfile: (String, Float) -> Unit,
     onResumeDraft: (ActiveWorkoutDraft) -> Unit,
@@ -120,6 +111,19 @@ fun DashboardScreen(
     val context = LocalContext.current
     var showGoalDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
+
+    val recommendedProgram = remember(data.muscleRecovery.overallReadinessPercent) {
+        WorkoutCatalog.recommendedForReadiness(data.muscleRecovery.overallReadinessPercent)
+    }
+
+    val greetingLabel = remember {
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        when {
+            hour < 12 -> "GOOD MORNING"
+            hour < 17 -> "GOOD AFTERNOON"
+            else -> "GOOD EVENING"
+        }
+    }
 
     if (showGoalDialog) {
         GoalSettingDialog(
@@ -151,18 +155,9 @@ fun DashboardScreen(
                     OutlinedTextField(
                         value = weightInput,
                         onValueChange = { raw -> weightInput = raw.filter { it.isDigit() || it == '.' }.take(5) },
-                        label = { Text("น้ำหนักตัว (กิโลกรัม) — ใช้คำนวณแคลอรีจริง") },
+                        label = { Text("น้ำหนักตัว (กิโลกรัม)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        text = if (!userEmail.isNullOrBlank()) {
-                            "บัญชีที่เชื่อมต่อ: $userEmail (ซิงก์คลาวด์อัตโนมัติ)"
-                        } else {
-                            "ข้อมูลการออกกำลังกาย เป้าหมาย และ Streak ซิงก์กับบัญชีของคุณอย่างปลอดภัย"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             },
@@ -185,7 +180,15 @@ fun DashboardScreen(
         )
     }
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(ObsidianBlack, DeepForestGreen.copy(alpha = 0.25f), ObsidianBlack)
+                )
+            )
+    ) {
         val isWide = maxWidth >= 720.dp
 
         LazyColumn(
@@ -193,231 +196,87 @@ fun DashboardScreen(
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. Clean Hero Header with Account Avatar & Cloud Badge
+            // 1. GREEN PULSE Personalized Hero Greeting
             item {
-                Card(
-                    shape = RoundedCornerShape(28.dp),
-                    colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
-                    modifier = Modifier.fillMaxWidth()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(ForestGreenDeep, ForestGreen, ForestGreenMedium)
-                                )
-                            )
-                            .auroraGlowBackdrop(
-                                primaryGlow = MintBright,
-                                secondaryGlow = EmeraldVibrant
-                            )
-                            .padding(20.dp)
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = DeepForestGreen.copy(alpha = 0.85f),
+                                border = BorderStroke(1.dp, EmeraldPulse.copy(alpha = 0.45f))
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Text(
-                                            text = "MOVE",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = MintBright,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Surface(
-                                            shape = RoundedCornerShape(999.dp),
-                                            color = Color.White.copy(alpha = 0.14f)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                            ) {
-                                                LivePulseBeacon(
-                                                    color = MintBright,
-                                                    isActive = true,
-                                                    size = 10.dp
-                                                )
-                                                Icon(
-                                                    imageVector = Icons.Rounded.CloudDone,
-                                                    contentDescription = null,
-                                                    tint = MintBright,
-                                                    modifier = Modifier.size(12.dp)
-                                                )
-                                                Text(
-                                                    text = "ซิงก์คลาวด์",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = Color.White
-                                                )
-                                            }
-                                        }
-                                    }
-                                    Text(
-                                        text = "สวัสดี, ${data.profile.displayName}",
-                                        style = MaterialTheme.typography.headlineMedium,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "Level ${data.progression.level} • ${data.progression.rankTitleThai}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MintBright
-                                    )
-                                }
-
-                                Surface(
-                                    shape = CircleShape,
-                                    color = Color.White.copy(alpha = 0.14f),
-                                    border = BorderStroke(1.5.dp, MintBright.copy(alpha = 0.45f)),
-                                    modifier = Modifier
-                                        .size(50.dp)
-                                        .clip(CircleShape)
-                                        .bounceClickable { showProfileDialog = true }
-                                        .testTag("edit_profile_button")
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        if (!userPhotoUrl.isNullOrBlank()) {
-                                            AsyncImage(
-                                                model = userPhotoUrl,
-                                                contentDescription = "รูปโปรไฟล์ผู้ใช้",
-                                                contentScale = ContentScale.Crop,
-                                                modifier = Modifier.fillMaxSize()
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Person,
-                                                contentDescription = "แก้ไขโปรไฟล์",
-                                                tint = MintBright
-                                            )
-                                        }
-                                    }
+                                    LivePulseBeacon(color = NeonLime, isActive = true, size = 8.dp)
+                                    Text(
+                                        text = "GREEN PULSE • $greetingLabel",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = NeonLime,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
                             }
+                        }
+                        Text(
+                            text = "สวัสดี, ${data.profile.displayName}",
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Train Hard. Live Strong. • Lv.${data.progression.level} ${data.progression.rankTitleThai}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.72f)
+                        )
+                    }
 
-                            val fireTransition = rememberInfiniteTransition(label = "streak_fire_pulse")
-                            val fireScale by fireTransition.animateFloat(
-                                initialValue = 1f,
-                                targetValue = if (data.streak.hasCompletedToday) 1.12f else 1.04f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "fire_scale"
-                            )
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = Color.White.copy(alpha = 0.12f),
-                                    border = if (data.streak.hasCompletedToday) {
-                                        BorderStroke(1.dp, MintBright.copy(alpha = 0.38f))
-                                    } else null,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.LocalFireDepartment,
-                                            contentDescription = "Streak",
-                                            tint = if (data.streak.hasCompletedToday) MintBright else AmberWarm,
-                                            modifier = Modifier
-                                                .size(22.dp)
-                                                .graphicsLayer {
-                                                    scaleX = fireScale
-                                                    scaleY = fireScale
-                                                }
-                                        )
-                                        Column {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                            ) {
-                                                Text(
-                                                    text = "Streak ${data.streak.currentStreak} วัน",
-                                                    style = MaterialTheme.typography.titleSmall,
-                                                    color = Color.White,
-                                                    fontWeight = FontWeight.Bold,
-                                                    modifier = Modifier.testTag("streak_count_text")
-                                                )
-                                                if (data.streak.hasCompletedToday) {
-                                                    Icon(
-                                                        imageVector = Icons.Rounded.CheckCircle,
-                                                        contentDescription = null,
-                                                        tint = MintBright,
-                                                        modifier = Modifier.size(14.dp)
-                                                    )
-                                                }
-                                            }
-                                            Text(
-                                                text = if (data.streak.longestStreak > 0) "สูงสุด ${data.streak.longestStreak} วัน" else "เริ่มสะสมสถิติ",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = Color.White.copy(alpha = 0.72f)
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = Color.White.copy(alpha = 0.12f),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .bounceClickable(onClick = onOpenRecoveryPlanPage)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.AutoAwesome,
-                                            contentDescription = null,
-                                            tint = MintBright,
-                                            modifier = Modifier.size(22.dp)
-                                        )
-                                        Column {
-                                            Text(
-                                                text = "พร้อม ${data.muscleRecovery.overallReadinessPercent}%",
-                                                style = MaterialTheme.typography.titleSmall,
-                                                color = Color.White,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                            Text(
-                                                text = "แนะนำ: ${data.muscleRecovery.recommendedSport.thaiName}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MintBright
-                                            )
-                                        }
-                                    }
-                                }
+                    Surface(
+                        shape = CircleShape,
+                        color = ObsidianElevated,
+                        border = BorderStroke(2.dp, Brush.linearGradient(listOf(EmeraldPulse, NeonLime))),
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .bounceClickable { showProfileDialog = true }
+                            .testTag("edit_profile_button")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (!userPhotoUrl.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = userPhotoUrl,
+                                    contentDescription = "รูปโปรไฟล์",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.Person,
+                                    contentDescription = "โปรไฟล์",
+                                    tint = NeonLime
+                                )
                             }
                         }
                     }
                 }
             }
 
-            // 2. Unfinished workout recovery banner if paused
+            // Unfinished workout banner
             if (data.pendingDraft != null) {
                 item {
-                    PendingWorkoutDraftCard(
+                    PendingDraftBanner(
                         draft = data.pendingDraft,
                         onResume = { onResumeDraft(data.pendingDraft) },
                         onDiscard = onDiscardDraft
@@ -425,190 +284,357 @@ fun DashboardScreen(
                 }
             }
 
-            // 3. Goal Ring + Primary CTA
-            if (isWide) {
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
+            // 2. Daily Fitness Summary + Triple Concentric Activity Progress Rings
+            item {
+                val goalMin = if (data.dailyGoal.isFreeMode) 30 else data.dailyGoal.goalMinutes.coerceAtLeast(10)
+                val minutesFraction = (data.dailyGoal.completedSecondsToday / 60f) / goalMin.toFloat()
+                val caloriesFraction = data.dailyGoal.caloriesToday / 450f
+                val stepsFraction = data.dailyGoal.stepsToday / 8000f
+
+                GlassPulseCard(
+                    highlightGlow = true,
+                    cornerRadius = 28.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .auroraGlowBackdrop(primaryGlow = NeonLime, secondaryGlow = EmeraldPulse)
+                            .padding(20.dp)
                     ) {
-                        DailyGoalCard(
-                            data = data,
-                            onEditGoal = { showGoalDialog = true },
-                            modifier = Modifier.weight(1.1f)
-                        )
-                        Column(
-                            modifier = Modifier.weight(0.9f),
-                            verticalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            StartExerciseHeroCard(onStartExerciseClick = onStartExerciseClick)
-                            TodayStatsRow(data = data)
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "DAILY FITNESS PULSE",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = NeonLime,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "สรุปกิจกรรมประจำวัน",
+                                        style = MaterialTheme.typography.titleLarge,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = { showGoalDialog = true },
+                                    shape = RoundedCornerShape(14.dp),
+                                    border = BorderStroke(1.dp, EmeraldPulse.copy(alpha = 0.55f)),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier.testTag("edit_goal_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Edit,
+                                        contentDescription = null,
+                                        tint = NeonLime,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (data.dailyGoal.isFreeMode) "อิสระ" else "${data.dailyGoal.goalMinutes}น.",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(18.dp)
+                            ) {
+                                MultiActivityRings(
+                                    minutesFraction = if (data.dailyGoal.isFreeMode && data.dailyGoal.completedSecondsToday > 0) 1f else minutesFraction,
+                                    caloriesFraction = caloriesFraction,
+                                    stepsFraction = stepsFraction,
+                                    centerPrimaryValue = "${data.dailyGoal.progressPercent}%",
+                                    centerSubtitle = if (data.dailyGoal.isGoalReached) "TARGET HIT" else "DAILY RING",
+                                    ringSize = if (isWide) 184.dp else 156.dp
+                                )
+
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    RingLegendRow(
+                                        dotColor = NeonLime,
+                                        title = "Active Minutes",
+                                        value = "${data.dailyGoal.completedMinutesToday} / ${if (data.dailyGoal.isFreeMode) "∞" else "${data.dailyGoal.goalMinutes}"} min"
+                                    )
+                                    RingLegendRow(
+                                        dotColor = EmeraldPulse,
+                                        title = "Calories Burned",
+                                        value = "${data.dailyGoal.caloriesToday} kcal"
+                                    )
+                                    RingLegendRow(
+                                        dotColor = ElectricCyan,
+                                        title = "Steps Counter",
+                                        value = "${data.dailyGoal.stepsToday} steps"
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color.White.copy(alpha = 0.08f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.LocalFireDepartment,
+                                                contentDescription = null,
+                                                tint = NeonLime,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text(
+                                                text = "Streak ${data.streak.currentStreak} วัน",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.testTag("streak_count_text")
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            AnimatedVisibility(visible = !data.dailyGoal.isFreeMode && data.dailyGoal.isGoalReached) {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = NeonLime.copy(alpha = 0.16f),
+                                    border = BorderStroke(1.dp, NeonLime.copy(alpha = 0.45f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = NeonLime, modifier = Modifier.size(18.dp))
+                                        Text(
+                                            text = "พิชิตเป้าหมาย ${data.dailyGoal.goalMinutes} นาทีวันนี้สำเร็จแล้ว!",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = NeonLime,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-            } else {
-                item {
-                    DailyGoalCard(
-                        data = data,
-                        onEditGoal = { showGoalDialog = true }
-                    )
-                }
-                item {
-                    StartExerciseHeroCard(onStartExerciseClick = onStartExerciseClick)
-                }
             }
 
+            // 3. Calories, Steps & Active Minutes Glass Metric Cards
             item {
-                AnimatedVisibility(visible = !data.dailyGoal.isFreeMode && data.dailyGoal.isGoalReached) {
-                    GoalReachedBanner(
-                        goalMinutes = data.dailyGoal.goalMinutes,
-                        completedMinutes = data.dailyGoal.completedMinutesToday
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    PulseKpiGlassTile(
+                        icon = Icons.Rounded.LocalFireDepartment,
+                        label = "Calories",
+                        value = "${data.dailyGoal.caloriesToday}",
+                        unit = "kcal",
+                        accent = NeonLime,
+                        modifier = Modifier.weight(1f)
+                    )
+                    PulseKpiGlassTile(
+                        icon = Icons.AutoMirrored.Rounded.DirectionsWalk,
+                        label = "Steps",
+                        value = "${data.dailyGoal.stepsToday}",
+                        unit = "steps",
+                        accent = EmeraldPulse,
+                        modifier = Modifier.weight(1f)
+                    )
+                    PulseKpiGlassTile(
+                        icon = Icons.Rounded.Timer,
+                        label = "Active",
+                        value = "${data.dailyGoal.completedMinutesToday}",
+                        unit = "min",
+                        accent = ElectricCyan,
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
 
-            if (!isWide) {
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            text = "สรุปกิจกรรมวันนี้",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            fontWeight = FontWeight.Bold
-                        )
-                        TodayStatsRow(data = data)
-                    }
-                }
-            }
-
-            // 4. Dedicated Topic Hub (Clean separation: 1 page per topic)
+            // 4. Daily Workout Recommendation (Realistic Athlete Photography)
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "หัวข้อเฉพาะทาง",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        fontWeight = FontWeight.Bold
-                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TopicNavigationCard(
-                            icon = Icons.Rounded.FitnessCenter,
-                            title = "แผนฝึก & กล้ามเนื้อ",
-                            subtitle = "ความพร้อม ${data.muscleRecovery.overallReadinessPercent}% • ${data.adaptivePlan.badgeTag}",
-                            accentColor = EmeraldVibrant,
-                            onClick = onOpenRecoveryPlanPage,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("topic_recovery_plan_card")
-                        )
-                        TopicNavigationCard(
-                            icon = Icons.Rounded.EmojiEvents,
-                            title = "เลเวล & เหรียญ",
-                            subtitle = "Lv.${data.progression.level} • ${data.progression.unlockedCount}/${data.progression.badges.size} เหรียญ",
-                            accentColor = AmberWarm,
-                            onClick = onOpenProgressionBadgesPage,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("topic_badges_card")
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        TopicNavigationCard(
-                            icon = Icons.Rounded.SportsHandball,
-                            title = "กีฬา & ยืดเหยียด",
-                            subtitle = "8 ชนิดกีฬา • กล้อง AI / GPS",
-                            accentColor = ForestGreen,
-                            onClick = onStartExerciseClick,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("topic_sports_card")
-                        )
-                        TopicNavigationCard(
-                            icon = Icons.Rounded.BarChart,
-                            title = "สถิติ & ประวัติ",
-                            subtitle = "บันทึกแล้ว ${data.workouts.size} กิจกรรม",
-                            accentColor = ForestGreenMedium,
-                            onClick = onViewHistory,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("topic_history_card")
-                        )
+                        Column {
+                            Text(
+                                text = "DAILY RECOMMENDATION",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NeonLime,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "โปรแกรมแนะนำสำหรับวันนี้",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        TextButton(onClick = onStartExerciseClick) {
+                            Text("ดูทั้งหมด", color = EmeraldPulse, fontWeight = FontWeight.Bold)
+                        }
                     }
 
                     Card(
-                        shape = RoundedCornerShape(22.dp),
-                        colors = CardDefaults.cardColors(containerColor = ForestGreenDeep),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        shape = RoundedCornerShape(26.dp),
+                        border = BorderStroke(1.dp, EmeraldPulse.copy(alpha = 0.45f)),
+                        colors = CardDefaults.cardColors(containerColor = ObsidianElevated),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(22.dp))
-                            .bounceClickable(onClick = onOpenNearbySpots)
-                            .testTag("topic_nearby_spots_card")
+                            .height(226.dp)
+                            .clip(RoundedCornerShape(26.dp))
+                            .bounceClickable { onOpenProgramDetail(recommendedProgram) }
+                            .testTag("daily_recommendation_card")
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    Brush.horizontalGradient(
-                                        colors = listOf(ForestGreenDeep, ForestGreen)
-                                    )
-                                )
-                                .auroraGlowBackdrop(primaryGlow = MintBright, secondaryGlow = EmeraldVibrant)
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            Image(
+                                painter = painterResource(id = recommendedProgram.imageRes),
+                                contentDescription = recommendedProgram.title,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
                             Box(
                                 modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(MintBright.copy(alpha = 0.2f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Navigation,
-                                    contentDescription = null,
-                                    tint = MintBright,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "แหล่งออกกำลังกายใกล้ฉัน & นำทาง",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "รวบรวมสวน ฟิตเนส สนามกีฬาใกล้สุด พร้อมเส้นทางนำทางจริง",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MintBright
-                                )
-                            }
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                                contentDescription = null,
-                                tint = MintBright
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                ObsidianBlack.copy(alpha = 0.25f),
+                                                ObsidianBlack.copy(alpha = 0.55f),
+                                                ObsidianBlack.copy(alpha = 0.94f)
+                                            )
+                                        )
+                                    )
                             )
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = NeonLime
+                                ) {
+                                    Text(
+                                        text = "READINESS ${data.muscleRecovery.overallReadinessPercent}% • ${recommendedProgram.category.title.uppercase()}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ObsidianBlack,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = ObsidianBlack.copy(alpha = 0.72f),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f))
+                                ) {
+                                    Text(
+                                        text = "${recommendedProgram.durationMinutes} min • ${recommendedProgram.difficulty.label}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .fillMaxWidth()
+                                    .padding(18.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.Bottom
+                            ) {
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(
+                                        text = recommendedProgram.title,
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                    Text(
+                                        text = "${recommendedProgram.coachFocus} • ~${recommendedProgram.estimatedCalories} kcal",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.White.copy(alpha = 0.82f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Surface(
+                                    shape = CircleShape,
+                                    color = EmeraldPulse,
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.PlayArrow,
+                                            contentDescription = "เริ่มฝึก",
+                                            tint = ObsidianBlack,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // 5. Compact Quick-Start Sport Row
+            // 5. Smart Hubs: Nearby Workout Spots & Navigation + Recovery AI
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    GlassHubTile(
+                        icon = Icons.Rounded.Explore,
+                        title = "สถานที่ใกล้ฉัน",
+                        subtitle = "สวน ยิม & นำทาง GPS",
+                        accent = EmeraldPulse,
+                        onClick = onOpenNearbySpots,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("topic_nearby_spots_card")
+                    )
+                    GlassHubTile(
+                        icon = Icons.Rounded.AutoAwesome,
+                        title = "ฟื้นฟูกล้ามเนื้อ",
+                        subtitle = "พร้อม ${data.muscleRecovery.overallReadinessPercent}% • แนะนำ",
+                        accent = NeonLime,
+                        onClick = onOpenRecoveryPlanPage,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("topic_recovery_plan_card")
+                    )
+                }
+            }
+
+            // 6. Quick Start Live Tracking Sports
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "เริ่มต้นด่วน",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onBackground,
+                        text = "QUICK LIVE TRACKING",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = EmeraldPulse,
                         fontWeight = FontWeight.Bold
                     )
                     LazyRow(
@@ -617,21 +643,18 @@ fun DashboardScreen(
                     ) {
                         items(
                             listOf(
-                                SportType.GENERAL,
                                 SportType.RUNNING,
-                                SportType.WALKING,
+                                SportType.GENERAL,
                                 SportType.JUMP_ROPE,
-                                SportType.CYCLING
+                                SportType.CYCLING,
+                                SportType.WALKING
                             ),
                             key = { it.name }
                         ) { sport ->
-                            Card(
-                                shape = RoundedCornerShape(18.dp),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                            GlassPulseCard(
+                                cornerRadius = 18.dp,
                                 modifier = Modifier
-                                    .width(126.dp)
-                                    .clip(RoundedCornerShape(18.dp))
+                                    .width(138.dp)
                                     .bounceClickable { onQuickStartSport(sport) }
                                     .testTag("quick_sport_${sport.name}")
                             ) {
@@ -644,17 +667,13 @@ fun DashboardScreen(
                                         modifier = Modifier
                                             .size(36.dp)
                                             .clip(CircleShape)
-                                            .background(
-                                                Brush.linearGradient(
-                                                    colors = listOf(EmeraldVibrant, ForestGreen)
-                                                )
-                                            ),
+                                            .background(Brush.linearGradient(listOf(EmeraldPulse, NeonLime))),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = sport.icon,
                                             contentDescription = sport.thaiName,
-                                            tint = Color.White,
+                                            tint = ObsidianBlack,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }
@@ -662,6 +681,7 @@ fun DashboardScreen(
                                         Text(
                                             text = sport.thaiName,
                                             style = MaterialTheme.typography.labelLarge,
+                                            color = Color.White,
                                             fontWeight = FontWeight.Bold,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -669,7 +689,7 @@ fun DashboardScreen(
                                         Text(
                                             text = "${sport.kcalPerMinute.toInt()} kcal/น.",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary
+                                            color = NeonLime
                                         )
                                     }
                                 }
@@ -683,232 +703,31 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun TodayStatsRow(data: DashboardData) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        MetricTile(
-            icon = Icons.Rounded.LocalFireDepartment,
-            label = "แคลอรีวันนี้",
-            value = "${data.dailyGoal.caloriesToday} kcal",
-            accentColor = AmberWarm,
-            modifier = Modifier.weight(1f)
-        )
-        MetricTile(
-            icon = Icons.AutoMirrored.Rounded.DirectionsWalk,
-            label = "ก้าววันนี้",
-            value = "${data.dailyGoal.stepsToday}",
-            accentColor = EmeraldVibrant,
-            modifier = Modifier.weight(1f)
-        )
-        MetricTile(
-            icon = Icons.Rounded.Route,
-            label = "ระยะทาง",
-            value = DateStreakUtils.formatDistanceKm(data.dailyGoal.distanceMetersToday),
-            accentColor = ForestGreen,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-@Composable
-private fun TopicNavigationCard(
-    icon: ImageVector,
+private fun RingLegendRow(
+    dotColor: Color,
     title: String,
-    subtitle: String,
-    accentColor: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    value: String
 ) {
-    Card(
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.2f)),
-        modifier = modifier
-            .clip(RoundedCornerShape(22.dp))
-            .bounceClickable(onClick = onClick)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .drawBehind {
-                    val center = Offset(size.width * 0.92f, size.height * 0.1f)
-                    val radius = size.maxDimension * 0.65f
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(accentColor.copy(alpha = 0.12f), Color.Transparent),
-                            center = center,
-                            radius = radius
-                        ),
-                        center = center,
-                        radius = radius
-                    )
-                }
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(accentColor.copy(alpha = 0.14f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = accentColor,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(dotColor)
+        )
+        Column {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = subtitle,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-@Composable
-private fun DailyGoalCard(
-    data: DashboardData,
-    onEditGoal: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val goal = data.dailyGoal
-    Card(
-        shape = RoundedCornerShape(26.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-        modifier = modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "เป้าหมายวันนี้",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (goal.isFreeMode) {
-                            "โหมดเวลาอิสระ (ไม่มีขั้นต่ำ)"
-                        } else {
-                            "เป้าหมาย ${goal.goalMinutes} นาที"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                OutlinedButton(
-                    onClick = onEditGoal,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.testTag("edit_goal_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Edit,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("ปรับโหมด")
-                }
-            }
-
-            val todayCount = remember(data.workouts) {
-                val today = DateStreakUtils.todayDateString()
-                data.workouts.count { it.activityDate == today }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                DailyGoalRing(
-                    progressFraction = goal.progressFraction,
-                    progressPercent = goal.progressPercent,
-                    completedMinutes = goal.completedMinutesToday,
-                    goalMinutes = goal.goalMinutes,
-                    ringSize = 140.dp
-                )
-
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    GoalStatRow(
-                        label = "เวลาสะสมวันนี้",
-                        value = DateStreakUtils.formatMinutesThai(goal.completedSecondsToday)
-                    )
-                    GoalStatRow(
-                        label = if (goal.isFreeMode) "รูปแบบเวลา" else "เวลาที่เหลือ",
-                        value = when {
-                            goal.isFreeMode -> "เวลาอิสระ"
-                            goal.isGoalReached -> "ครบเป้าหมาย!"
-                            else -> "${goal.remainingMinutesToday} นาที"
-                        }
-                    )
-                    GoalStatRow(
-                        label = if (goal.isFreeMode) "กิจกรรมวันนี้" else "ความคืบหน้า",
-                        value = if (goal.isFreeMode) "$todayCount ครั้ง" else "${goal.progressPercent}%"
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GoalStatRow(label: String, value: String) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = Color.White.copy(alpha = 0.65f)
             )
             Text(
                 text = value,
                 style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = Color.White,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -916,123 +735,124 @@ private fun GoalStatRow(label: String, value: String) {
 }
 
 @Composable
-private fun StartExerciseHeroCard(onStartExerciseClick: () -> Unit) {
-    val pulseTransition = rememberInfiniteTransition(label = "cta_play_pulse")
-    val playScale by pulseTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.09f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1300, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "play_icon_scale"
-    )
-
-    Surface(
-        shape = RoundedCornerShape(24.dp),
-        shadowElevation = 6.dp,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .bounceClickable(pressedScale = 0.97f, onClick = onStartExerciseClick)
-            .testTag("start_workout_cta")
+private fun PulseKpiGlassTile(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    unit: String,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    GlassPulseCard(
+        cornerRadius = 22.dp,
+        accentBorder = accent.copy(alpha = 0.28f),
+        modifier = modifier
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        colors = listOf(ForestGreen, EmeraldVibrant)
-                    )
-                )
-                .shimmerSweepEffect(shimmerAlpha = 0.22f, durationMillis = 2500),
-            contentAlignment = Alignment.Center
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .graphicsLayer {
-                            scaleX = playScale
-                            scaleY = playScale
-                        }
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.22f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
+                Icon(imageVector = icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+            }
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 Text(
-                    text = "เริ่มออกกำลังกายเลย",
-                    style = MaterialTheme.typography.titleLarge,
+                    text = value,
+                    style = MaterialTheme.typography.headlineSmall,
                     color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = unit,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                    modifier = Modifier.padding(bottom = 3.dp)
                 )
             }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White.copy(alpha = 0.68f)
+            )
         }
     }
 }
 
 @Composable
-private fun GoalReachedBanner(goalMinutes: Int, completedMinutes: Int) {
-    Card(
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-        border = BorderStroke(1.dp, EmeraldVibrant.copy(alpha = 0.35f)),
-        modifier = Modifier.fillMaxWidth()
+private fun GlassHubTile(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    accent: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    GlassPulseCard(
+        cornerRadius = 22.dp,
+        accentBorder = accent.copy(alpha = 0.35f),
+        modifier = modifier.bounceClickable(onClick = onClick)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .shimmerSweepEffect(shimmerAlpha = 0.16f, durationMillis = 3200)
                 .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.img_goal_badge),
-                contentDescription = stringResource(R.string.goal_badge_desc),
-                contentScale = ContentScale.Crop,
+            Box(
                 modifier = Modifier
-                    .size(50.dp)
-                    .clip(RoundedCornerShape(14.dp))
-            )
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(accent.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(imageVector = icon, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "ยินดีด้วย! เป้าหมายรายวันสำเร็จแล้ว",
+                    text = title,
                     style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    fontWeight = FontWeight.Bold
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "ออกกำลังกายแล้ว $completedMinutes นาที (เป้า $goalMinutes นาที)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.6f),
+                modifier = Modifier.size(18.dp)
+            )
         }
     }
 }
 
 @Composable
-private fun PendingWorkoutDraftCard(
+private fun PendingDraftBanner(
     draft: ActiveWorkoutDraft,
     onResume: () -> Unit,
     onDiscard: () -> Unit
 ) {
-    Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+    GlassPulseCard(
+        cornerRadius = 22.dp,
+        accentBorder = NeonLime.copy(alpha = 0.45f),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -1043,39 +863,35 @@ private fun PendingWorkoutDraftCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Schedule,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary
-                )
+                Icon(Icons.Rounded.Bolt, contentDescription = null, tint = NeonLime)
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "พบกิจกรรม${draft.sportType.thaiName}ที่ยังไม่จบ",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                        text = "มีกิจกรรมค้างอยู่: ${draft.sportType.thaiName}",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "เวลาที่จับไว้: ${DateStreakUtils.formatDurationClock(draft.elapsedSeconds)}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f)
+                        text = "เวลา ${DateStreakUtils.formatDurationClock(draft.elapsedSeconds)} • ${draft.caloriesExact.toInt()} kcal",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NeonLime
                     )
                 }
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                NeonPulseButton(
+                    text = "ทำต่อ",
+                    onClick = onResume,
+                    modifier = Modifier.weight(1f).height(48.dp)
+                )
                 OutlinedButton(
                     onClick = onDiscard,
-                    modifier = Modifier.weight(1f)
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.height(48.dp)
                 ) {
+                    Icon(Icons.Rounded.DeleteOutline, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text("ยกเลิก")
-                }
-                Button(
-                    onClick = onResume,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("ทำกิจกรรมต่อ")
                 }
             }
         }

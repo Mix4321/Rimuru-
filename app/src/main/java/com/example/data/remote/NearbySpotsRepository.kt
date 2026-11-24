@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -28,18 +29,21 @@ enum class NearbySpotCategory(val thaiLabel: String) {
     PARK_RUN("สวน & ลู่วิ่ง"),
     FITNESS_GYM("ฟิตเนส & ยิม"),
     SPORTS_COURT("สนามกีฬา"),
-    SWIMMING("สระว่ายน้ำ")
+    SWIMMING("สระว่ายน้ำ"),
+    MARTIAL_WELLNESS("มวย / โยคะ / สตูดิโอ"),
+    CYCLING_OUTDOOR("ปั่น / สเก็ต / กิจกรรมแจ้ง")
 }
 
 enum class TravelMode(
     val thaiLabel: String,
     val osrmProfile: String,
+    val fossgisProfile: String,
     val googleNavMode: String,
     val fallbackSpeedMps: Double
 ) {
-    WALK("เดิน", "foot", "w", 1.35),
-    BIKE("จักรยาน", "bicycle", "b", 4.2),
-    DRIVE("ขับรถ", "driving", "d", 10.5)
+    WALK("เดิน", "foot", "foot", "w", 1.35),
+    BIKE("จักรยาน", "bicycle", "bike", "b", 4.2),
+    DRIVE("ขับรถ", "driving", "car", "d", 10.5)
 }
 
 data class GeoCoord(
@@ -58,7 +62,16 @@ data class WorkoutSpot(
     val addressSummary: String? = null,
     val openingHours: String? = null,
     val sportTags: String? = null,
-    val suggestedSport: SportType = SportType.GENERAL
+    val suggestedSport: SportType = SportType.GENERAL,
+    val phone: String? = null,
+    val website: String? = null,
+    val surfaceThai: String? = null,
+    val hasLighting: Boolean? = null,
+    val isIndoor: Boolean? = null,
+    val feeInfoThai: String? = null,
+    val accessThai: String? = null,
+    val sportBadgesThai: List<String> = emptyList(),
+    val operatorName: String? = null
 )
 
 data class NavigationStep(
@@ -137,10 +150,10 @@ class NearbySpotsRepository {
                             collectedByKey.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
                         }
                         val targetCount = when (idx) {
-                            0 -> 14
-                            1 -> 10
-                            2 -> 5
-                            else -> 1
+                            0 -> 45
+                            1 -> 30
+                            2 -> 15
+                            else -> 5
                         }
                         if (collectedByKey.size >= targetCount) break
                     } catch (t: Throwable) {
@@ -149,8 +162,8 @@ class NearbySpotsRepository {
                 }
             }
 
-            // Fallback / Supplement via Photon & Nominatim if Overpass returned too few or errored
-            if (collectedByKey.size < 5) {
+            // Supplement via Photon & Nominatim so every nearby venue category is richly covered
+            if (collectedByKey.size < 25) {
                 val backupResult = runCatching {
                     fetchNearbyViaPhotonAndNominatim(userLat, userLng, radiusMeters)
                 }
@@ -302,29 +315,48 @@ class NearbySpotsRepository {
         destLng: Double,
         travelMode: TravelMode
     ): Result<NavigationRouteResult> = withContext(Dispatchers.IO) {
-        runCatching {
-            val url = String.format(
+        val candidateUrls = listOf(
+            String.format(
                 Locale.US,
-                "https://router.project-osrm.org/route/v1/%s/%.6f,%.6f;%.6f,%.6f?overview=full&geometries=geojson&steps=true",
+                "https://routing.openstreetmap.de/routed-%s/route/v1/driving/%.6f,%.6f;%.6f,%.6f?overview=simplified&geometries=geojson&steps=true",
+                travelMode.fossgisProfile,
+                originLng,
+                originLat,
+                destLng,
+                destLat
+            ),
+            String.format(
+                Locale.US,
+                "https://router.project-osrm.org/route/v1/%s/%.6f,%.6f;%.6f,%.6f?overview=simplified&geometries=geojson&steps=true",
                 travelMode.osrmProfile,
                 originLng,
                 originLat,
                 destLng,
                 destLat
             )
-            val raw = getUrl(url)
-            parseOsrmRoute(rawJson = raw, travelMode = travelMode)
-                ?: buildDirectFallbackRoute(originLat, originLng, destLat, destLng, travelMode)
-        }.recoverCatching {
-            buildDirectFallbackRoute(originLat, originLng, destLat, destLng, travelMode)
+        )
+
+        val fetched = withTimeoutOrNull(7_000L) {
+            for (url in candidateUrls) {
+                val parsed = runCatching {
+                    val raw = getUrl(url, connectMs = 3_500, readMs = 4_500)
+                    parseOsrmRoute(rawJson = raw, travelMode = travelMode)
+                }.getOrNull()
+                if (parsed != null) return@withTimeoutOrNull parsed
+            }
+            null
         }
+
+        Result.success(
+            fetched ?: buildDirectFallbackRoute(originLat, originLng, destLat, destLng, travelMode)
+        )
     }
 
     private fun buildPhotonSearchUrl(
         query: String,
         nearLat: Double?,
         nearLng: Double?,
-        limit: Int = 18
+        limit: Int = 20
     ): String {
         val encoded = URLEncoder.encode(query, "UTF-8")
         val bias = if (nearLat != null && nearLng != null) {
@@ -341,11 +373,17 @@ class NearbySpotsRepository {
         radiusMeters: Int
     ): List<WorkoutSpot> = coroutineScope {
         val maxDistance = if (radiusMeters > 0) radiusMeters + 500 else MAX_QUERY_RADIUS_METERS
-        val queries = listOf("park", "fitness gym", "stadium sport", "swimming pool")
+        val queries = listOf(
+            "park",
+            "fitness gym",
+            "stadium sport",
+            "badminton swimming",
+            "yoga muay thai boxing"
+        )
         val deferreds = queries.map { q ->
             async {
                 runCatching {
-                    val raw = getUrl(buildPhotonSearchUrl(q, lat, lng, limit = 18))
+                    val raw = getUrl(buildPhotonSearchUrl(q, lat, lng, limit = 20))
                     parsePhotonWorkoutSpots(
                         rawJson = raw,
                         originLat = lat,
@@ -371,7 +409,7 @@ class NearbySpotsRepository {
             }
         }
 
-        if (collected.size < 3) {
+        if (collected.size < 4) {
             val nomFallback = runCatching {
                 val raw = getUrl(buildNominatimSearchUrl("park", lat, lng))
                 parseNominatimResults(raw).mapNotNull { sug ->
@@ -411,14 +449,17 @@ class NearbySpotsRepository {
         val latStr = String.format(Locale.US, "%.6f", lat)
         val lngStr = String.format(Locale.US, "%.6f", lng)
         return """
-            [out:json][timeout:18];
+            [out:json][timeout:22];
             (
-              nwr["leisure"~"^(fitness_centre|fitness_station|sports_centre|stadium|track)$"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["amenity"="gym"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["leisure"="swimming_pool"]["access"!="private"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["leisure"~"^(park|pitch)$"]["name"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["leisure"~"^(fitness_centre|fitness_station|sports_centre|sports_hall|stadium|track|swimming_pool|pitch|recreation_ground|ice_rink|golf_course|bowling_alley|dance)$"]["access"!="private"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["amenity"~"^(gym|dojo|yoga_studio)$"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["leisure"~"^(park|nature_reserve)$"]["name"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["club"="sport"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["sport"]["access"!="private"](around:$radiusMeters,$latStr,$lngStr);
+              way["highway"="cycleway"]["name"](around:$radiusMeters,$latStr,$lngStr);
+              relation["route"~"^(running|bicycle|fitness_trail)$"](around:$radiusMeters,$latStr,$lngStr);
             );
-            out center 150;
+            out center 350;
         """.trimIndent()
     }
 
@@ -434,13 +475,14 @@ class NearbySpotsRepository {
         return """
             [out:json][timeout:18];
             (
-              nwr["name"~"$safeRegex",i]["leisure"~"park|fitness_centre|fitness_station|sports_centre|stadium|track|swimming_pool|pitch"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["name:th"~"$safeRegex",i]["leisure"~"park|fitness_centre|fitness_station|sports_centre|stadium|track|swimming_pool|pitch"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["name:en"~"$safeRegex",i]["leisure"~"park|fitness_centre|fitness_station|sports_centre|stadium|track|swimming_pool|pitch"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["name"~"$safeRegex",i]["amenity"="gym"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["name"~"$safeRegex",i]["leisure"~"park|fitness_centre|fitness_station|sports_centre|sports_hall|stadium|track|swimming_pool|pitch|recreation_ground|golf_course|dance"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["name:th"~"$safeRegex",i]["leisure"~"park|fitness_centre|fitness_station|sports_centre|sports_hall|stadium|track|swimming_pool|pitch|recreation_ground|golf_course|dance"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["name:en"~"$safeRegex",i]["leisure"~"park|fitness_centre|fitness_station|sports_centre|sports_hall|stadium|track|swimming_pool|pitch|recreation_ground|golf_course|dance"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["name"~"$safeRegex",i]["amenity"~"^(gym|dojo|yoga_studio)$"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["name"~"$safeRegex",i]["club"="sport"](around:$radiusMeters,$latStr,$lngStr);
               nwr["sport"~"$safeRegex",i](around:${minOf(radiusMeters, 50_000)},$latStr,$lngStr);
             );
-            out center 60;
+            out center 90;
         """.trimIndent()
     }
 
@@ -502,27 +544,80 @@ class NearbySpotsRepository {
             val leisure = tags["leisure"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val amenity = tags["amenity"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val sportTag = tags["sport"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val clubTag = tags["club"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val highwayTag = tags["highway"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val routeTag = tags["route"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
             val (category, detailLabel, fallbackName, suggestedSport) = classifySpot(
                 leisure = leisure,
                 amenity = amenity,
-                sportTag = sportTag
+                sportTag = sportTag,
+                clubTag = clubTag,
+                highwayTag = highwayTag,
+                routeTag = routeTag
             )
 
-            // Skip unnamed generic parks/pitches to keep results meaningful
-            if (rawName.isNullOrBlank() && (leisure == "park" || leisure == "pitch")) continue
+            // Skip unnamed generic parks/nature_reserves, or unnamed pitches with no sport tag
+            if (rawName.isNullOrBlank() && (leisure == "park" || leisure == "nature_reserve")) continue
+            if (rawName.isNullOrBlank() && leisure == "pitch" && sportTag.isBlank()) continue
 
-            val finalName = rawName ?: fallbackName
+            val sportBadges = parseSportBadgesThai(sportTag)
+            val finalName = rawName ?: if (leisure == "pitch" && sportBadges.isNotEmpty()) {
+                "สนาม${sportBadges.first()}สาธารณะ"
+            } else {
+                fallbackName
+            }
             val dedupKey = dedupKeyFor(finalName, lat, lng)
             if (!seenKeys.add(dedupKey)) continue
 
             val distance = haversineMeters(originLat, originLng, lat, lng).roundToInt().coerceAtLeast(1)
+            val houseNo = tags["addr:housenumber"]?.jsonPrimitive?.contentOrNull
             val street = tags["addr:street"]?.jsonPrimitive?.contentOrNull
-            val district = tags["addr:subdistrict"]?.jsonPrimitive?.contentOrNull
-                ?: tags["addr:district"]?.jsonPrimitive?.contentOrNull
+            val subdistrict = tags["addr:subdistrict"]?.jsonPrimitive?.contentOrNull
+            val district = tags["addr:district"]?.jsonPrimitive?.contentOrNull
                 ?: tags["addr:city"]?.jsonPrimitive?.contentOrNull
-            val address = listOfNotNull(street, district).filter { it.isNotBlank() }.joinToString(", ").ifBlank { null }
+            val postcode = tags["addr:postcode"]?.jsonPrimitive?.contentOrNull
+            val address = listOfNotNull(houseNo, street, subdistrict, district, postcode)
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString(", ")
+                .ifBlank { null }
+
             val openingHours = tags["opening_hours"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val phone = (tags["phone"]?.jsonPrimitive?.contentOrNull
+                ?: tags["contact:phone"]?.jsonPrimitive?.contentOrNull
+                ?: tags["contact:mobile"]?.jsonPrimitive?.contentOrNull)?.takeIf { it.isNotBlank() }
+            val website = (tags["website"]?.jsonPrimitive?.contentOrNull
+                ?: tags["contact:website"]?.jsonPrimitive?.contentOrNull
+                ?: tags["facebook"]?.jsonPrimitive?.contentOrNull
+                ?: tags["contact:facebook"]?.jsonPrimitive?.contentOrNull)?.takeIf { it.isNotBlank() }
+            val surfaceThai = translateSurfaceThai(tags["surface"]?.jsonPrimitive?.contentOrNull)
+            val hasLighting = when (tags["lit"]?.jsonPrimitive?.contentOrNull?.lowercase(Locale.ROOT)) {
+                "yes", "true", "24/7" -> true
+                "no", "false" -> false
+                else -> null
+            }
+            val isIndoor = when (tags["indoor"]?.jsonPrimitive?.contentOrNull?.lowercase(Locale.ROOT)) {
+                "yes", "true" -> true
+                "no", "false" -> false
+                else -> null
+            }
+            val feeRaw = tags["fee"]?.jsonPrimitive?.contentOrNull?.lowercase(Locale.ROOT)
+            val chargeRaw = tags["charge"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val feeInfoThai = when {
+                chargeRaw != null -> "ค่าบริการ: $chargeRaw"
+                feeRaw == "no" -> "เข้าใช้บริการฟรี"
+                feeRaw == "yes" -> "มีค่าบริการ"
+                else -> null
+            }
+            val accessThai = when (tags["access"]?.jsonPrimitive?.contentOrNull?.lowercase(Locale.ROOT)) {
+                "yes", "public" -> "เปิดสาธารณะ"
+                "permissive" -> "เข้าใช้ได้ทั่วไป"
+                "customers" -> "สำหรับสมาชิก/ลูกค้า"
+                else -> null
+            }
+            val operatorName = tags["operator"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
 
             val elementId = "${obj["type"]?.jsonPrimitive?.contentOrNull ?: "n"}_${obj["id"]?.jsonPrimitive?.contentOrNull ?: dedupKey}"
 
@@ -537,7 +632,16 @@ class NearbySpotsRepository {
                 addressSummary = address,
                 openingHours = openingHours,
                 sportTags = sportTag.takeIf { it.isNotBlank() },
-                suggestedSport = suggestedSport
+                suggestedSport = suggestedSport,
+                phone = phone,
+                website = website,
+                surfaceThai = surfaceThai,
+                hasLighting = hasLighting,
+                isIndoor = isIndoor,
+                feeInfoThai = feeInfoThai,
+                accessThai = accessThai,
+                sportBadgesThai = sportBadges,
+                operatorName = operatorName
             )
         }
 
@@ -556,12 +660,13 @@ class NearbySpotsRepository {
         val totalDuration = firstRoute["duration"]?.jsonPrimitive?.doubleOrNull?.roundToInt() ?: 0
 
         val coordsArray = firstRoute["geometry"]?.jsonObject?.get("coordinates")?.jsonArray ?: JsonArray(emptyList())
-        val polyline = coordsArray.mapNotNull { ptEl ->
+        val rawPolyline = coordsArray.mapNotNull { ptEl ->
             val pair = ptEl as? JsonArray ?: return@mapNotNull null
             val lng = pair.getOrNull(0)?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
             val lat = pair.getOrNull(1)?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
             GeoCoord(lat = lat, lng = lng)
         }
+        val polyline = downsamplePolyline(rawPolyline, maxPoints = 350)
         if (polyline.size < 2) return null
 
         val steps = mutableListOf<NavigationStep>()
@@ -655,9 +760,11 @@ class NearbySpotsRepository {
         val result = mutableListOf<WorkoutSpot>()
 
         val allowedLeisureValues = setOf(
-            "park", "fitness_centre", "fitness_station", "sports_centre",
-            "stadium", "track", "swimming_pool", "pitch", "recreation_ground"
+            "park", "fitness_centre", "fitness_station", "sports_centre", "sports_hall",
+            "stadium", "track", "swimming_pool", "pitch", "recreation_ground",
+            "ice_rink", "golf_course", "bowling_alley", "dance", "nature_reserve"
         )
+        val allowedAmenityValues = setOf("gym", "dojo", "yoga_studio")
 
         for (featEl in features) {
             val feat = featEl as? JsonObject ?: continue
@@ -672,18 +779,20 @@ class NearbySpotsRepository {
             val osmVal = props["osm_value"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
             val isExerciseTag = (osmKey == "leisure" && osmVal in allowedLeisureValues) ||
-                (osmKey == "amenity" && osmVal == "gym") ||
-                (osmKey == "sport")
+                (osmKey == "amenity" && osmVal in allowedAmenityValues) ||
+                (osmKey == "club" && osmVal == "sport") ||
+                (osmKey == "sport") ||
+                (osmKey == "highway" && osmVal == "cycleway")
 
             if (filterExerciseOnly && !isExerciseTag) continue
 
             val (category, detailLabel, _, suggestedSport) = if (isExerciseTag) {
                 classifySpot(
-                    leisure = if (osmKey == "leisure") {
-                        if (osmVal == "recreation_ground") "park" else osmVal
-                    } else "",
+                    leisure = if (osmKey == "leisure") osmVal else "",
                     amenity = if (osmKey == "amenity") osmVal else "",
-                    sportTag = if (osmKey == "sport") osmVal else ""
+                    sportTag = if (osmKey == "sport") osmVal else "",
+                    clubTag = if (osmKey == "club") osmVal else "",
+                    highwayTag = if (osmKey == "highway") osmVal else ""
                 )
             } else {
                 val inferredCat = inferCategoryFromText(rawName)
@@ -708,6 +817,7 @@ class NearbySpotsRepository {
                 .joinToString(", ")
                 .ifBlank { null }
             val osmId = props["osm_id"]?.jsonPrimitive?.contentOrNull ?: dedupKey.hashCode().toString()
+            val sportBadges = if (osmKey == "sport") parseSportBadgesThai(osmVal) else emptyList()
 
             result += WorkoutSpot(
                 id = "ph_${osmId}_$dist",
@@ -719,11 +829,23 @@ class NearbySpotsRepository {
                 distanceMeters = dist,
                 addressSummary = address,
                 sportTags = if (osmKey == "sport") osmVal else null,
-                suggestedSport = suggestedSport
+                suggestedSport = suggestedSport,
+                sportBadgesThai = sportBadges
             )
         }
 
         return result.sortedBy { it.distanceMeters }
+    }
+
+    private fun downsamplePolyline(points: List<GeoCoord>, maxPoints: Int): List<GeoCoord> {
+        if (points.size <= maxPoints) return points
+        val step = (points.size - 1).toDouble() / (maxPoints - 1)
+        val sampled = ArrayList<GeoCoord>(maxPoints)
+        for (i in 0 until maxPoints - 1) {
+            sampled += points[(i * step).toInt().coerceIn(0, points.lastIndex)]
+        }
+        sampled += points.last()
+        return sampled
     }
 
     private fun buildDirectFallbackRoute(
@@ -781,11 +903,65 @@ class NearbySpotsRepository {
     private fun sanitizeOverpassRegex(input: String): String =
         input.replace(Regex("[\\\\\"\\[\\](){}.+*?^$|]"), " ").trim().replace(Regex("\\s+"), ".*")
 
+    private fun parseSportBadgesThai(sportRaw: String): List<String> {
+        if (sportRaw.isBlank()) return emptyList()
+        return sportRaw.split(';', ',')
+            .map { it.trim().lowercase(Locale.ROOT) }
+            .filter { it.isNotBlank() }
+            .mapNotNull { token ->
+                when (token) {
+                    "running", "jogging", "athletics" -> "วิ่ง/กรีฑา"
+                    "soccer", "football" -> "ฟุตบอล"
+                    "futsal" -> "ฟุตซอล"
+                    "basketball" -> "บาสเกตบอล"
+                    "badminton" -> "แบดมินตัน"
+                    "tennis" -> "เทนนิส"
+                    "table_tennis" -> "ปิงปอง"
+                    "volleyball", "beachvolleyball" -> "วอลเลย์บอล"
+                    "sepak_takraw", "takraw" -> "ตะกร้อ"
+                    "swimming" -> "ว่ายน้ำ"
+                    "cycling", "bmx", "mtb" -> "ปั่นจักรยาน"
+                    "fitness", "gym", "workout", "calisthenics", "crossfit", "weightlifting" -> "ฟิตเนส/เวท"
+                    "muay_thai", "boxing", "kickboxing" -> "มวยไทย/มวยสากล"
+                    "martial_arts", "karate", "taekwondo", "judo", "aikido" -> "ศิลปะการต่อสู้"
+                    "yoga" -> "โยคะ"
+                    "pilates" -> "พิลาทิส"
+                    "climbing", "bouldering" -> "ปีนผาจำลอง"
+                    "skateboard", "roller_skating", "skating" -> "สเก็ตบอร์ด/สเก็ต"
+                    "golf" -> "กอล์ฟ"
+                    "archery" -> "ยิงธนู"
+                    "bowling" -> "โบว์ลิ่ง"
+                    "rowing", "kayak", "canoe" -> "พายเรือ/คายัค"
+                    else -> token.replace('_', ' ').replaceFirstChar { it.uppercase() }
+                }
+            }
+            .distinct()
+            .take(5)
+    }
+
+    private fun translateSurfaceThai(raw: String?): String? = when (raw?.trim()?.lowercase(Locale.ROOT)) {
+        "asphalt" -> "พื้นยางมะตอย"
+        "concrete", "paved" -> "พื้นคอนกรีต/ปูน"
+        "tartan", "rubber" -> "ลู่วิ่งยางสังเคราะห์ (Tartan)"
+        "grass" -> "สนามหญ้าจริง"
+        "artificial_turf" -> "หญ้าเทียม"
+        "wood", "hardwood" -> "พื้นไม้ปาร์เกต์"
+        "clay" -> "คอร์ดดิน"
+        "sand" -> "พื้นทราย"
+        "acrylic", "plastic" -> "พื้นอะคริลิก/ยาง"
+        "gravel", "fine_gravel" -> "ทางลูกรัง/กรวด"
+        else -> null
+    }
+
     private fun inferCategoryFromText(text: String): NearbySpotCategory {
         val lower = text.lowercase(Locale.ROOT)
         return when {
             lower.contains("สระ") || lower.contains("ว่ายน้ำ") || lower.contains("swim") || lower.contains("pool") ->
                 NearbySpotCategory.SWIMMING
+            lower.contains("มวย") || lower.contains("muay") || lower.contains("boxing") || lower.contains("โยคะ") || lower.contains("yoga") || lower.contains("pilates") ->
+                NearbySpotCategory.MARTIAL_WELLNESS
+            lower.contains("จักรยาน") || lower.contains("สเก็ต") || lower.contains("ปีนผา") || lower.contains("bike") || lower.contains("skate") || lower.contains("climb") ->
+                NearbySpotCategory.CYCLING_OUTDOOR
             lower.contains("ฟิตเนส") || lower.contains("ยิม") || lower.contains("fitness") || lower.contains("gym") || lower.contains("jetts") || lower.contains("virgin") ->
                 NearbySpotCategory.FITNESS_GYM
             lower.contains("สวน") || lower.contains("วิ่ง") || lower.contains("park") || lower.contains("track") ->
@@ -799,8 +975,9 @@ class NearbySpotsRepository {
         return when {
             lower.contains("แบด") || lower.contains("badminton") || lower.contains("tennis") -> SportType.BADMINTON
             lower.contains("บาส") || lower.contains("basketball") -> SportType.BASKETBALL
-            lower.contains("บอล") || lower.contains("football") || lower.contains("soccer") -> SportType.FOOTBALL
-            lower.contains("จักรยาน") || lower.contains("cycling") || lower.contains("bike") -> SportType.CYCLING
+            lower.contains("บอล") || lower.contains("football") || lower.contains("soccer") || lower.contains("futsal") -> SportType.FOOTBALL
+            lower.contains("จักรยาน") || lower.contains("cycling") || lower.contains("bike") || category == NearbySpotCategory.CYCLING_OUTDOOR -> SportType.CYCLING
+            lower.contains("โยคะ") || lower.contains("yoga") || lower.contains("pilates") -> SportType.GENERAL
             category == NearbySpotCategory.PARK_RUN -> SportType.RUNNING
             else -> SportType.GENERAL
         }
@@ -816,16 +993,55 @@ class NearbySpotsRepository {
     private fun classifySpot(
         leisure: String,
         amenity: String,
-        sportTag: String
+        sportTag: String,
+        clubTag: String = "",
+        highwayTag: String = "",
+        routeTag: String = ""
     ): SpotClassification {
         val sportLower = sportTag.lowercase(Locale.ROOT)
         return when {
             leisure == "swimming_pool" || sportLower.contains("swim") -> SpotClassification(
                 category = NearbySpotCategory.SWIMMING,
-                detailLabel = "สระว่ายน้ำ",
+                detailLabel = "สระว่ายน้ำ / ศูนย์กีฬาทางน้ำ",
                 fallbackName = "สระว่ายน้ำสาธารณะ",
                 suggestedSport = SportType.GENERAL
             )
+            amenity == "dojo" || amenity == "yoga_studio" || leisure == "dance" ||
+                sportLower.contains("muay") || sportLower.contains("boxing") ||
+                sportLower.contains("martial") || sportLower.contains("karate") ||
+                sportLower.contains("taekwondo") || sportLower.contains("judo") ||
+                sportLower.contains("yoga") || sportLower.contains("pilates") -> {
+                val isYoga = amenity == "yoga_studio" || sportLower.contains("yoga") || sportLower.contains("pilates")
+                val detail = when {
+                    sportLower.contains("muay") || sportLower.contains("boxing") || amenity == "dojo" -> "ค่ายมวย / ศิลปะการต่อสู้"
+                    isYoga -> "สตูดิโอโยคะ / พิลาทิส"
+                    leisure == "dance" -> "สตูดิโอเต้น / แอโรบิก"
+                    else -> "สตูดิโอฟิตเนส / โยคะ"
+                }
+                SpotClassification(
+                    category = NearbySpotCategory.MARTIAL_WELLNESS,
+                    detailLabel = detail,
+                    fallbackName = detail,
+                    suggestedSport = SportType.GENERAL
+                )
+            }
+            highwayTag == "cycleway" || routeTag == "bicycle" ||
+                sportLower.contains("cycling") || sportLower.contains("skateboard") ||
+                sportLower.contains("climbing") || sportLower.contains("skating") ||
+                sportLower.contains("kayak") || sportLower.contains("rowing") -> {
+                val detail = when {
+                    highwayTag == "cycleway" || routeTag == "bicycle" || sportLower.contains("cycling") -> "เลนจักรยาน / เส้นทางปั่น"
+                    sportLower.contains("climbing") -> "ศูนย์ปีนผาจำลอง"
+                    sportLower.contains("skate") -> "ลานสเก็ตบอร์ด / โรลเลอร์สเก็ต"
+                    else -> "สถานที่กิจกรรมกลางแจ้ง"
+                }
+                SpotClassification(
+                    category = NearbySpotCategory.CYCLING_OUTDOOR,
+                    detailLabel = detail,
+                    fallbackName = detail,
+                    suggestedSport = SportType.CYCLING
+                )
+            }
             leisure == "fitness_centre" || amenity == "gym" -> SpotClassification(
                 category = NearbySpotCategory.FITNESS_GYM,
                 detailLabel = "ฟิตเนส / ยิม",
@@ -838,21 +1054,22 @@ class NearbySpotsRepository {
                 fallbackName = "จุดออกกำลังกายกลางแจ้ง",
                 suggestedSport = SportType.GENERAL
             )
-            leisure == "track" -> SpotClassification(
+            leisure == "track" || routeTag == "running" || routeTag == "fitness_trail" -> SpotClassification(
                 category = NearbySpotCategory.PARK_RUN,
                 detailLabel = "ลู่วิ่ง / เส้นทางวิ่ง",
                 fallbackName = "ลู่วิ่งออกกำลังกาย",
                 suggestedSport = SportType.RUNNING
             )
-            leisure == "park" -> SpotClassification(
+            leisure == "park" || leisure == "recreation_ground" || leisure == "nature_reserve" -> SpotClassification(
                 category = NearbySpotCategory.PARK_RUN,
-                detailLabel = "สวนสาธารณะ",
+                detailLabel = if (leisure == "nature_reserve") "พื้นที่สีเขียว / เส้นทางเดินวิ่ง" else "สวนสาธารณะ",
                 fallbackName = "สวนสาธารณะ",
                 suggestedSport = SportType.RUNNING
             )
-            leisure == "stadium" || leisure == "sports_centre" || leisure == "pitch" -> {
+            leisure in setOf("stadium", "sports_centre", "sports_hall", "pitch", "ice_rink", "golf_course", "bowling_alley") ||
+                clubTag == "sport" || sportTag.isNotBlank() -> {
                 val mappedSport = when {
-                    sportLower.contains("soccer") || sportLower.contains("football") -> SportType.FOOTBALL
+                    sportLower.contains("soccer") || sportLower.contains("football") || sportLower.contains("futsal") -> SportType.FOOTBALL
                     sportLower.contains("basketball") -> SportType.BASKETBALL
                     sportLower.contains("badminton") || sportLower.contains("tennis") -> SportType.BADMINTON
                     sportLower.contains("cycling") -> SportType.CYCLING
@@ -862,7 +1079,11 @@ class NearbySpotsRepository {
                 val detail = when (leisure) {
                     "stadium" -> "สนามกีฬา / สเตเดียม"
                     "sports_centre" -> "ศูนย์กีฬาครบวงจร"
-                    else -> "ลานกีฬา / สนามฝึก"
+                    "sports_hall" -> "อาคารกีฬาในร่ม"
+                    "golf_course" -> "สนามกอล์ฟ / ไดรฟ์กอล์ฟ"
+                    "ice_rink" -> "ลานสเก็ตน้ำแข็ง"
+                    "bowling_alley" -> "โบว์ลิ่ง"
+                    else -> if (clubTag == "sport") "สโมสรกีฬา" else "ลานกีฬา / สนามฝึก"
                 }
                 SpotClassification(
                     category = NearbySpotCategory.SPORTS_COURT,
@@ -880,11 +1101,15 @@ class NearbySpotsRepository {
         }
     }
 
-    private fun getUrl(urlString: String): String {
+    private fun getUrl(
+        urlString: String,
+        connectMs: Int = 9_000,
+        readMs: Int = 11_000
+    ): String {
         val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 12_000
-            readTimeout = 15_000
+            connectTimeout = connectMs
+            readTimeout = readMs
             setRequestProperty("User-Agent", "MoveActivityTracker/1.0 (Android)")
             setRequestProperty("Accept", "application/json")
         }

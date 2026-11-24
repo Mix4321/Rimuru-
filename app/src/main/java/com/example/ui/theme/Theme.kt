@@ -1,6 +1,5 @@
 package com.example.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
@@ -9,74 +8,82 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
 
-private val MoveLightColorScheme = lightColorScheme(
-    primary = ForestGreen,
-    onPrimary = PureWhite,
+private val ColorErrorLight = androidx.compose.ui.graphics.Color(0xFFBA1A1A)
+private val ColorErrorContainerLight = androidx.compose.ui.graphics.Color(0xFFFFDAD6)
+
+private val GreenPulseLightColorScheme = lightColorScheme(
+    primary = DeepForestGreen,
+    onPrimary = CleanWhite,
     primaryContainer = MintPale,
-    onPrimaryContainer = ForestGreenDeep,
-    secondary = EmeraldVibrant,
-    onSecondary = PureWhite,
+    onPrimaryContainer = DeepForestGreen,
+    secondary = EmeraldPulse,
+    onSecondary = ObsidianBlack,
     secondaryContainer = MintSoft,
-    onSecondaryContainer = ForestGreenDeep,
-    tertiary = AmberWarm,
-    onTertiary = PureWhite,
+    onSecondaryContainer = DeepForestGreen,
+    tertiary = NeonLime,
+    onTertiary = ObsidianBlack,
     tertiaryContainer = AmberSoft,
-    onTertiaryContainer = InkDark,
-    background = CreamBackground,
+    onTertiaryContainer = ObsidianBlack,
+    background = LightCloudBg,
     onBackground = InkDark,
-    surface = PureWhite,
+    surface = CleanWhite,
     onSurface = InkDark,
-    surfaceVariant = CreamSurfaceVariant,
+    surfaceVariant = LightSurfaceVariant,
     onSurfaceVariant = InkMuted,
-    surfaceContainerLowest = PureWhite,
-    surfaceContainerLow = CreamBackground,
-    surfaceContainer = CreamElevated,
-    surfaceContainerHigh = CreamSurfaceVariant,
+    surfaceContainerLowest = CleanWhite,
+    surfaceContainerLow = LightCloudBg,
+    surfaceContainer = LightElevated,
+    surfaceContainerHigh = LightSurfaceVariant,
     outline = OutlineSoft,
-    error = CoralError,
-    onError = PureWhite,
-    errorContainer = CoralErrorContainer,
+    error = ColorErrorLight,
+    onError = CleanWhite,
+    errorContainer = ColorErrorContainerLight,
 )
 
-private val MoveDarkColorScheme = darkColorScheme(
-    primary = MintBright,
-    onPrimary = ForestGreenDeep,
-    primaryContainer = ForestGreenMedium,
-    onPrimaryContainer = MintSoft,
-    secondary = MintSoft,
-    onSecondary = ForestGreenDeep,
-    secondaryContainer = ForestGreen,
-    onSecondaryContainer = MintPale,
-    tertiary = AmberWarm,
-    onTertiary = PureWhite,
-    background = DarkBg,
-    onBackground = DarkInk,
-    surface = DarkSurface,
-    onSurface = DarkInk,
-    surfaceVariant = DarkSurfaceVariant,
+private val GreenPulseDarkColorScheme = darkColorScheme(
+    primary = EmeraldPulse,
+    onPrimary = ObsidianBlack,
+    primaryContainer = DeepForestGreen,
+    onPrimaryContainer = NeonLime,
+    secondary = NeonLime,
+    onSecondary = ObsidianBlack,
+    secondaryContainer = ObsidianElevated,
+    onSecondaryContainer = CleanWhite,
+    tertiary = NeonLime,
+    onTertiary = ObsidianBlack,
+    tertiaryContainer = DeepForestGreen,
+    onTertiaryContainer = NeonLime,
+    background = ObsidianBlack,
+    onBackground = CleanWhite,
+    surface = ObsidianSurface,
+    onSurface = CleanWhite,
+    surfaceVariant = ObsidianElevated,
     onSurfaceVariant = DarkInkMuted,
-    surfaceContainerLowest = DarkBg,
-    surfaceContainerLow = DarkSurface,
-    surfaceContainer = DarkSurface,
-    surfaceContainerHigh = DarkSurfaceVariant,
+    surfaceContainerLowest = ObsidianBlack,
+    surfaceContainerLow = ObsidianSurface,
+    surfaceContainer = ObsidianElevated,
+    surfaceContainerHigh = DeepForestGreen,
     outline = ForestGreenMedium,
-    error = CoralErrorContainer,
-    onError = CoralError,
+    outlineVariant = GlassBorderLight,
+    error = CoralError,
+    onError = CleanWhite,
+    errorContainer = CoralErrorContainer,
+    onErrorContainer = CleanWhite
 )
 
 val MoveShapes = Shapes(
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(18.dp),
-    large = RoundedCornerShape(24.dp),
+    small = RoundedCornerShape(14.dp),
+    medium = RoundedCornerShape(20.dp),
+    large = RoundedCornerShape(26.dp),
     extraLarge = RoundedCornerShape(32.dp)
 )
 
 @Composable
 fun MoveTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) MoveDarkColorScheme else MoveLightColorScheme
+    val colorScheme = if (darkTheme) GreenPulseDarkColorScheme else GreenPulseLightColorScheme
     MaterialTheme(
         colorScheme = colorScheme,
         typography = MoveTypography,

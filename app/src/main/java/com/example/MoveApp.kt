@@ -12,8 +12,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -30,17 +30,16 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
-import androidx.compose.material.icons.outlined.Dashboard
-import androidx.compose.material.icons.outlined.Explore
-import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.SportsHandball
-import androidx.compose.material.icons.rounded.Dashboard
-import androidx.compose.material.icons.rounded.Explore
-import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.SportsHandball
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.FitnessCenter
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.FitnessCenter
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -61,7 +60,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -71,8 +69,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.ui.components.auroraGlowBackdrop
-import com.example.ui.theme.MintBright
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -98,21 +94,27 @@ import com.example.data.local.ThemeMode
 import com.example.data.model.SportType
 import com.example.data.model.TrackingMode
 import com.example.data.model.UiState
+import com.example.data.model.WorkoutCatalog
+import com.example.ui.components.auroraGlowBackdrop
 import com.example.ui.screens.AccountRegistrationScreen
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.DashboardScreen
-import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.NearbySpotsScreen
+import com.example.ui.screens.ProfileScreen
+import com.example.ui.screens.ProgressScreen
 import com.example.ui.screens.ProgressionBadgesScreen
 import com.example.ui.screens.RecoveryAndPlanScreen
-import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.SportSelectionScreen
 import com.example.ui.screens.StretchingScreen
+import com.example.ui.screens.WorkoutCatalogScreen
+import com.example.ui.screens.WorkoutDetailScreen
 import com.example.ui.screens.WorkoutScreen
-import com.example.ui.theme.ForestGreen
-import com.example.ui.theme.ForestGreenDeep
-import com.example.ui.theme.ForestGreenMedium
+import com.example.ui.theme.DeepForestGreen
+import com.example.ui.theme.EmeraldPulse
 import com.example.ui.theme.MoveTheme
+import com.example.ui.theme.NeonLime
+import com.example.ui.theme.ObsidianBlack
+import com.example.ui.theme.ObsidianSurface
 import com.example.ui.viewmodel.AuthGateState
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.DashboardData
@@ -127,16 +129,22 @@ import kotlinx.serialization.Serializable
 data object DashboardRoute
 
 @Serializable
+data object WorkoutCatalogRoute
+
+@Serializable
+data class WorkoutDetailRoute(val programId: String)
+
+@Serializable
+data object ProgressRoute
+
+@Serializable
+data object ProfileRoute
+
+@Serializable
 data object SportsRoute
 
 @Serializable
 data object NearbySpotsRoute
-
-@Serializable
-data object HistoryRoute
-
-@Serializable
-data object SettingsRoute
 
 @Serializable
 data object RecoveryPlanRoute
@@ -169,40 +177,33 @@ private enum class TopLevelTab(
     val routeObj: Any,
     val tag: String
 ) {
-    DASHBOARD(
-        labelRes = R.string.nav_dashboard,
-        selectedIcon = Icons.Rounded.Dashboard,
-        unselectedIcon = Icons.Outlined.Dashboard,
+    HOME(
+        labelRes = R.string.nav_home,
+        selectedIcon = Icons.Rounded.Home,
+        unselectedIcon = Icons.Outlined.Home,
         routeObj = DashboardRoute,
-        tag = "nav_tab_dashboard"
+        tag = "nav_tab_home"
     ),
-    SPORTS(
-        labelRes = R.string.nav_sports,
-        selectedIcon = Icons.Rounded.SportsHandball,
-        unselectedIcon = Icons.Outlined.SportsHandball,
-        routeObj = SportsRoute,
-        tag = "nav_tab_sports"
+    WORKOUT(
+        labelRes = R.string.nav_workout,
+        selectedIcon = Icons.Rounded.FitnessCenter,
+        unselectedIcon = Icons.Outlined.FitnessCenter,
+        routeObj = WorkoutCatalogRoute,
+        tag = "nav_tab_workout"
     ),
-    PLACES(
-        labelRes = R.string.nav_places,
-        selectedIcon = Icons.Rounded.Explore,
-        unselectedIcon = Icons.Outlined.Explore,
-        routeObj = NearbySpotsRoute,
-        tag = "nav_tab_places"
+    PROGRESS(
+        labelRes = R.string.nav_progress,
+        selectedIcon = Icons.Rounded.BarChart,
+        unselectedIcon = Icons.Outlined.BarChart,
+        routeObj = ProgressRoute,
+        tag = "nav_tab_progress"
     ),
-    HISTORY(
-        labelRes = R.string.nav_history,
-        selectedIcon = Icons.Rounded.History,
-        unselectedIcon = Icons.Outlined.History,
-        routeObj = HistoryRoute,
-        tag = "nav_tab_history"
-    ),
-    SETTINGS(
-        labelRes = R.string.nav_settings,
-        selectedIcon = Icons.Rounded.Settings,
-        unselectedIcon = Icons.Outlined.Settings,
-        routeObj = SettingsRoute,
-        tag = "nav_tab_settings"
+    PROFILE(
+        labelRes = R.string.nav_profile,
+        selectedIcon = Icons.Rounded.Person,
+        unselectedIcon = Icons.Outlined.Person,
+        routeObj = ProfileRoute,
+        tag = "nav_tab_profile"
     )
 }
 
@@ -214,7 +215,7 @@ fun AppNavigation() {
     val rootSettings by settingsStore.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
 
     val isDarkTheme = when (rootSettings.themeMode) {
-        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.SYSTEM -> true
         ThemeMode.LIGHT -> false
         ThemeMode.DARK -> true
     }
@@ -274,7 +275,7 @@ fun AppNavigation() {
 
             is AuthGateState.Authenticated -> {
                 key(state.uid) {
-                    AuthenticatedMoveShell(
+                    AuthenticatedGreenPulseShell(
                         authUser = state,
                         onSignOut = performSignOut
                     )
@@ -301,10 +302,10 @@ private fun AuthCheckingSplash() {
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(ForestGreenDeep, ForestGreenMedium, ForestGreen)
+                    colors = listOf(ObsidianBlack, DeepForestGreen, ObsidianBlack)
                 )
             )
-            .auroraGlowBackdrop(),
+            .auroraGlowBackdrop(primaryGlow = NeonLime, secondaryGlow = EmeraldPulse),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -313,9 +314,10 @@ private fun AuthCheckingSplash() {
         ) {
             Surface(
                 shape = CircleShape,
-                color = Color.White.copy(alpha = 0.16f),
+                color = DeepForestGreen.copy(alpha = 0.72f),
+                border = BorderStroke(1.5.dp, NeonLime.copy(alpha = 0.55f)),
                 modifier = Modifier
-                    .size(80.dp)
+                    .size(84.dp)
                     .graphicsLayer {
                         scaleX = pulseScale
                         scaleY = pulseScale
@@ -325,33 +327,33 @@ private fun AuthCheckingSplash() {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.DirectionsRun,
                         contentDescription = null,
-                        tint = MintBright,
-                        modifier = Modifier.size(42.dp)
+                        tint = NeonLime,
+                        modifier = Modifier.size(44.dp)
                     )
                 }
             }
             Text(
-                text = "MOVE",
+                text = "GREEN PULSE",
                 style = MaterialTheme.typography.headlineLarge,
                 color = Color.White,
                 fontWeight = FontWeight.ExtraBold
             )
+            Text(
+                text = "Train Hard. Live Strong.",
+                style = MaterialTheme.typography.titleSmall,
+                color = NeonLime
+            )
             CircularProgressIndicator(
-                color = Color.White,
+                color = EmeraldPulse,
                 strokeWidth = 3.dp,
                 modifier = Modifier.size(28.dp)
-            )
-            Text(
-                text = "กำลังเชื่อมต่อบัญชีนักกีฬาของคุณ...",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.85f)
             )
         }
     }
 }
 
 @Composable
-private fun AuthenticatedMoveShell(
+private fun AuthenticatedGreenPulseShell(
     authUser: AuthGateState.Authenticated,
     onSignOut: () -> Unit
 ) {
@@ -424,6 +426,7 @@ private fun AuthenticatedMoveShell(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDest = navBackStackEntry?.destination
     val hideBottomNavigation = currentDest?.hasRoute<WorkoutRoute>() == true ||
+        currentDest?.hasRoute<WorkoutDetailRoute>() == true ||
         currentDest?.hasRoute<StretchingRoute>() == true ||
         currentDest?.hasRoute<RecoveryPlanRoute>() == true ||
         currentDest?.hasRoute<ProgressionBadgesRoute>() == true
@@ -446,49 +449,58 @@ private fun AuthenticatedMoveShell(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 if (!useRail && !hideBottomNavigation) {
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        tonalElevation = 3.dp
-                    ) {
-                        TopLevelTab.entries.forEach { tab ->
-                            val selected = currentDest?.hierarchy?.any {
-                                when (tab) {
-                                    TopLevelTab.DASHBOARD -> it.hasRoute<DashboardRoute>()
-                                    TopLevelTab.SPORTS -> it.hasRoute<SportsRoute>()
-                                    TopLevelTab.PLACES -> it.hasRoute<NearbySpotsRoute>()
-                                    TopLevelTab.HISTORY -> it.hasRoute<HistoryRoute>()
-                                    TopLevelTab.SETTINGS -> it.hasRoute<SettingsRoute>()
-                                }
-                            } == true
-                            val iconScale by animateFloatAsState(
-                                targetValue = if (selected) 1.14f else 1f,
-                                animationSpec = spring(
-                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                    stiffness = Spring.StiffnessMedium
-                                ),
-                                label = "nav_icon_scale"
-                            )
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = { navigateTopLevel(tab) },
-                                icon = {
-                                    Icon(
-                                        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                        contentDescription = stringResource(tab.labelRes),
-                                        modifier = Modifier.graphicsLayer {
-                                            scaleX = iconScale
-                                            scaleY = iconScale
-                                        }
-                                    )
-                                },
-                                label = { Text(stringResource(tab.labelRes)) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = MaterialTheme.colorScheme.primary,
-                                    selectedTextColor = MaterialTheme.colorScheme.primary,
-                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer
-                                ),
-                                modifier = Modifier.testTag(tab.tag)
-                            )
+                    Column {
+                        HorizontalDivider(color = EmeraldPulse.copy(alpha = 0.22f))
+                        NavigationBar(
+                            containerColor = ObsidianSurface,
+                            tonalElevation = 0.dp
+                        ) {
+                            TopLevelTab.entries.forEach { tab ->
+                                val selected = currentDest?.hierarchy?.any {
+                                    when (tab) {
+                                        TopLevelTab.HOME -> it.hasRoute<DashboardRoute>()
+                                        TopLevelTab.WORKOUT -> it.hasRoute<WorkoutCatalogRoute>() || it.hasRoute<SportsRoute>() || it.hasRoute<NearbySpotsRoute>()
+                                        TopLevelTab.PROGRESS -> it.hasRoute<ProgressRoute>()
+                                        TopLevelTab.PROFILE -> it.hasRoute<ProfileRoute>()
+                                    }
+                                } == true
+                                val iconScale by animateFloatAsState(
+                                    targetValue = if (selected) 1.15f else 1f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                                        stiffness = Spring.StiffnessMedium
+                                    ),
+                                    label = "nav_icon_scale"
+                                )
+                                NavigationBarItem(
+                                    selected = selected,
+                                    onClick = { navigateTopLevel(tab) },
+                                    icon = {
+                                        Icon(
+                                            imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+                                            contentDescription = stringResource(tab.labelRes),
+                                            modifier = Modifier.graphicsLayer {
+                                                scaleX = iconScale
+                                                scaleY = iconScale
+                                            }
+                                        )
+                                    },
+                                    label = {
+                                        Text(
+                                            text = stringResource(tab.labelRes),
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = ObsidianBlack,
+                                        selectedTextColor = NeonLime,
+                                        indicatorColor = NeonLime,
+                                        unselectedIconColor = Color.White.copy(alpha = 0.6f),
+                                        unselectedTextColor = Color.White.copy(alpha = 0.6f)
+                                    ),
+                                    modifier = Modifier.testTag(tab.tag)
+                                )
+                            }
                         }
                     }
                 }
@@ -501,59 +513,48 @@ private fun AuthenticatedMoveShell(
             ) {
                 if (useRail && !hideBottomNavigation) {
                     NavigationRail(
-                        containerColor = MaterialTheme.colorScheme.surface,
+                        containerColor = ObsidianSurface,
                         modifier = Modifier.fillMaxHeight()
                     ) {
                         Spacer(modifier = Modifier.size(12.dp))
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.DirectionsRun,
-                            contentDescription = "MOVE",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(30.dp)
+                            contentDescription = "Green Pulse",
+                            tint = NeonLime,
+                            modifier = Modifier.size(28.dp)
                         )
                         Text(
-                            text = "MOVE",
+                            text = "PULSE",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
+                            color = NeonLime,
+                            fontWeight = FontWeight.ExtraBold
                         )
                         Spacer(modifier = Modifier.size(20.dp))
                         TopLevelTab.entries.forEach { tab ->
                             val selected = currentDest?.hierarchy?.any {
                                 when (tab) {
-                                    TopLevelTab.DASHBOARD -> it.hasRoute<DashboardRoute>()
-                                    TopLevelTab.SPORTS -> it.hasRoute<SportsRoute>()
-                                    TopLevelTab.PLACES -> it.hasRoute<NearbySpotsRoute>()
-                                    TopLevelTab.HISTORY -> it.hasRoute<HistoryRoute>()
-                                    TopLevelTab.SETTINGS -> it.hasRoute<SettingsRoute>()
+                                    TopLevelTab.HOME -> it.hasRoute<DashboardRoute>()
+                                    TopLevelTab.WORKOUT -> it.hasRoute<WorkoutCatalogRoute>() || it.hasRoute<SportsRoute>() || it.hasRoute<NearbySpotsRoute>()
+                                    TopLevelTab.PROGRESS -> it.hasRoute<ProgressRoute>()
+                                    TopLevelTab.PROFILE -> it.hasRoute<ProfileRoute>()
                                 }
                             } == true
-                            val railScale by animateFloatAsState(
-                                targetValue = if (selected) 1.14f else 1f,
-                                animationSpec = spring(
-                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                    stiffness = Spring.StiffnessMedium
-                                ),
-                                label = "rail_icon_scale"
-                            )
                             NavigationRailItem(
                                 selected = selected,
                                 onClick = { navigateTopLevel(tab) },
                                 icon = {
                                     Icon(
                                         imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                        contentDescription = stringResource(tab.labelRes),
-                                        modifier = Modifier.graphicsLayer {
-                                            scaleX = railScale
-                                            scaleY = railScale
-                                        }
+                                        contentDescription = stringResource(tab.labelRes)
                                     )
                                 },
                                 label = { Text(stringResource(tab.labelRes)) },
                                 colors = NavigationRailItemDefaults.colors(
-                                    selectedIconColor = MaterialTheme.colorScheme.primary,
-                                    selectedTextColor = MaterialTheme.colorScheme.primary,
-                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                                    selectedIconColor = ObsidianBlack,
+                                    selectedTextColor = NeonLime,
+                                    indicatorColor = NeonLime,
+                                    unselectedIconColor = Color.White.copy(alpha = 0.6f),
+                                    unselectedTextColor = Color.White.copy(alpha = 0.6f)
                                 ),
                                 modifier = Modifier.testTag(tab.tag)
                             )
@@ -574,16 +575,12 @@ private fun AuthenticatedMoveShell(
                             fadeIn(animationSpec = tween(220)) +
                                 scaleIn(initialScale = 0.97f, animationSpec = tween(220))
                         },
-                        exitTransition = {
-                            fadeOut(animationSpec = tween(160))
-                        },
+                        exitTransition = { fadeOut(animationSpec = tween(160)) },
                         popEnterTransition = {
                             fadeIn(animationSpec = tween(220)) +
                                 scaleIn(initialScale = 0.98f, animationSpec = tween(220))
                         },
-                        popExitTransition = {
-                            fadeOut(animationSpec = tween(160))
-                        },
+                        popExitTransition = { fadeOut(animationSpec = tween(160)) },
                         modifier = Modifier
                             .fillMaxSize()
                             .widthIn(max = 1040.dp)
@@ -594,7 +591,7 @@ private fun AuthenticatedMoveShell(
                                     data = data,
                                     userEmail = authUser.email,
                                     userPhotoUrl = authUser.photoUrl,
-                                    onStartExerciseClick = { navigateTopLevel(TopLevelTab.SPORTS) },
+                                    onStartExerciseClick = { navigateTopLevel(TopLevelTab.WORKOUT) },
                                     onQuickStartSport = { sport ->
                                         navController.navigate(
                                             StretchingRoute(
@@ -602,6 +599,9 @@ private fun AuthenticatedMoveShell(
                                                 trackingModeName = sport.defaultTrackingMode.name
                                             )
                                         )
+                                    },
+                                    onOpenProgramDetail = { program ->
+                                        navController.navigate(WorkoutDetailRoute(program.id))
                                     },
                                     onUpdateDailyGoal = dashboardViewModel::updateDailyGoal,
                                     onUpdateProfile = dashboardViewModel::updateProfile,
@@ -615,16 +615,75 @@ private fun AuthenticatedMoveShell(
                                         )
                                     },
                                     onDiscardDraft = dashboardViewModel::discardPendingDraft,
-                                    onViewHistory = { navigateTopLevel(TopLevelTab.HISTORY) },
-                                    onOpenRecoveryPlanPage = {
-                                        navController.navigate(RecoveryPlanRoute)
-                                    },
-                                    onOpenProgressionBadgesPage = {
-                                        navController.navigate(ProgressionBadgesRoute)
-                                    },
-                                    onOpenNearbySpots = {
-                                        navigateTopLevel(TopLevelTab.PLACES)
-                                    }
+                                    onViewHistory = { navigateTopLevel(TopLevelTab.PROGRESS) },
+                                    onOpenRecoveryPlanPage = { navController.navigate(RecoveryPlanRoute) },
+                                    onOpenProgressionBadgesPage = { navController.navigate(ProgressionBadgesRoute) },
+                                    onOpenNearbySpots = { navController.navigate(NearbySpotsRoute) }
+                                )
+                            }
+                        }
+
+                        composable<WorkoutCatalogRoute> {
+                            WorkoutCatalogScreen(
+                                onSelectProgram = { program ->
+                                    navController.navigate(WorkoutDetailRoute(program.id))
+                                },
+                                onOpenLiveSportsPicker = { navController.navigate(SportsRoute) },
+                                onOpenNearbySpots = { navController.navigate(NearbySpotsRoute) }
+                            )
+                        }
+
+                        composable<WorkoutDetailRoute> { backStackEntry ->
+                            val args = backStackEntry.toRoute<WorkoutDetailRoute>()
+                            val program = WorkoutCatalog.byId(args.programId)
+                            WorkoutDetailScreen(
+                                program = program,
+                                onBack = { navController.popBackStack() },
+                                onStartWorkout = { selectedProgram ->
+                                    navController.navigate(
+                                        WorkoutRoute(
+                                            sportName = selectedProgram.linkedSport.name,
+                                            trackingModeName = selectedProgram.defaultTrackingMode.name,
+                                            resumeDraft = false,
+                                            isHiit = selectedProgram.isHiit,
+                                            hiitWorkSec = selectedProgram.hiitWorkSec,
+                                            hiitRestSec = selectedProgram.hiitRestSec,
+                                            hiitRounds = selectedProgram.hiitRounds
+                                        )
+                                    )
+                                },
+                                onStartPreStretch = { selectedProgram ->
+                                    navController.navigate(
+                                        StretchingRoute(
+                                            sportName = selectedProgram.linkedSport.name,
+                                            trackingModeName = selectedProgram.defaultTrackingMode.name
+                                        )
+                                    )
+                                }
+                            )
+                        }
+
+                        composable<ProgressRoute> {
+                            DashboardStateContent(state = dashboardState) { data ->
+                                ProgressScreen(
+                                    data = data,
+                                    userHeightCm = appSettings.userHeightCm,
+                                    onUpdateWeight = dashboardViewModel::updateProfile,
+                                    onDeleteWorkout = dashboardViewModel::deleteWorkout
+                                )
+                            }
+                        }
+
+                        composable<ProfileRoute> {
+                            DashboardStateContent(state = dashboardState) { data ->
+                                ProfileScreen(
+                                    data = data,
+                                    settingsViewModel = settingsViewModel,
+                                    userEmail = authUser.email,
+                                    userPhotoUrl = authUser.photoUrl,
+                                    onOpenAllBadges = { navController.navigate(ProgressionBadgesRoute) },
+                                    onOpenFullHistory = { navigateTopLevel(TopLevelTab.PROGRESS) },
+                                    onSignOutClick = onSignOut
                                 )
                             }
                         }
@@ -731,24 +790,6 @@ private fun AuthenticatedMoveShell(
                             )
                         }
 
-                        composable<HistoryRoute> {
-                            DashboardStateContent(state = dashboardState) { data ->
-                                HistoryScreen(
-                                    data = data,
-                                    onDeleteWorkout = dashboardViewModel::deleteWorkout
-                                )
-                            }
-                        }
-
-                        composable<SettingsRoute> {
-                            SettingsScreen(
-                                viewModel = settingsViewModel,
-                                userEmail = authUser.email,
-                                userPhotoUrl = authUser.photoUrl,
-                                onSignOutClick = onSignOut
-                            )
-                        }
-
                         composable<WorkoutRoute> { backStackEntry ->
                             val routeArgs = backStackEntry.toRoute<WorkoutRoute>()
                             val sport = SportType.fromNameSafe(routeArgs.sportName)
@@ -823,18 +864,20 @@ private fun DashboardStateContent(
     when (state) {
         is UiState.Loading -> {
             Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(ObsidianBlack),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    CircularProgressIndicator(color = NeonLime)
                     Text(
-                        text = "กำลังโหลดข้อมูล MOVE...",
+                        text = "กำลังโหลดข้อมูล Green Pulse...",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = Color.White.copy(alpha = 0.78f)
                     )
                 }
             }
@@ -843,6 +886,7 @@ private fun DashboardStateContent(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(ObsidianBlack)
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {

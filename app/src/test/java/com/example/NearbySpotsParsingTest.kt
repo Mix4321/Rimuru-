@@ -161,7 +161,7 @@ class NearbySpotsParsingTest {
         assertTrue(query.contains("around:120000,13.730500,100.531800"))
         assertTrue(query.contains("สวนลุมพินี.*Lumpini.*Park"))
         assertTrue(query.contains("\"name:th\"~"))
-        assertTrue(query.contains("\"amenity\"=\"gym\""))
+        assertTrue(query.contains("\"amenity\"~\"^(gym|dojo|yoga_studio)$\""))
     }
 
     @Test
@@ -216,9 +216,67 @@ class NearbySpotsParsingTest {
     @Test
     fun buildOverpassQuery_usesCanonicalOutCenterSyntax() {
         val query = repo.buildOverpassQuery(13.7563, 100.5018, 8000)
-        assertTrue(query.contains("out center 150;"))
+        assertTrue(query.contains("out center 350;"))
         assertTrue(!query.contains("out center tags"))
         assertTrue(query.contains("around:8000,13.756300,100.501800"))
+        assertTrue(query.contains("yoga_studio"))
+        assertTrue(query.contains("cycleway"))
+    }
+
+    @Test
+    fun parseOverpassSpots_extractsDetailedVenueMetadataAndCategories() {
+        val detailedJson = """
+            {
+              "elements": [
+                {
+                  "type": "node",
+                  "id": 3001,
+                  "lat": 13.7320,
+                  "lon": 100.5330,
+                  "tags": {
+                    "name": "ค่ายมวยไทยศิษย์ยอด",
+                    "amenity": "dojo",
+                    "sport": "muay_thai;boxing",
+                    "indoor": "yes",
+                    "lit": "yes",
+                    "fee": "yes",
+                    "phone": "02-123-4567",
+                    "website": "https://example.com/muaythai",
+                    "surface": "wood"
+                  }
+                },
+                {
+                  "type": "way",
+                  "id": 3002,
+                  "center": { "lat": 13.7390, "lon": 100.5450 },
+                  "tags": {
+                    "name": "ทางปั่นจักรยานสวนเบญจกิติ",
+                    "highway": "cycleway",
+                    "surface": "asphalt",
+                    "fee": "no",
+                    "lit": "yes"
+                  }
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val spots = repo.parseOverpassSpots(detailedJson, 13.7310, 100.5318)
+        assertEquals(2, spots.size)
+
+        val muay = spots[0]
+        assertEquals(NearbySpotCategory.MARTIAL_WELLNESS, muay.category)
+        assertEquals(true, muay.isIndoor)
+        assertEquals(true, muay.hasLighting)
+        assertEquals("มีค่าบริการ", muay.feeInfoThai)
+        assertEquals("02-123-4567", muay.phone)
+        assertEquals("พื้นไม้ปาร์เกต์", muay.surfaceThai)
+        assertTrue(muay.sportBadgesThai.contains("มวยไทย/มวยสากล"))
+
+        val bike = spots[1]
+        assertEquals(NearbySpotCategory.CYCLING_OUTDOOR, bike.category)
+        assertEquals("เข้าใช้บริการฟรี", bike.feeInfoThai)
+        assertEquals("พื้นยางมะตอย", bike.surfaceThai)
     }
 
     @Test

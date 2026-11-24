@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "MOVE"
+rootProject.name = "Green Pulse"
 
 include(":app")

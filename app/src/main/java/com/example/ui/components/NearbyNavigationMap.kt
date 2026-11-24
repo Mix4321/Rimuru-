@@ -39,6 +39,7 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.FolderOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
@@ -104,6 +105,8 @@ private fun categoryPinColor(category: NearbySpotCategory): Int = when (category
     NearbySpotCategory.FITNESS_GYM -> AndroidColor.parseColor("#F59E0B")
     NearbySpotCategory.SPORTS_COURT -> AndroidColor.parseColor("#0EA5E9")
     NearbySpotCategory.SWIMMING -> AndroidColor.parseColor("#06B6D4")
+    NearbySpotCategory.MARTIAL_WELLNESS -> AndroidColor.parseColor("#EC4899")
+    NearbySpotCategory.CYCLING_OUTDOOR -> AndroidColor.parseColor("#8B5CF6")
     NearbySpotCategory.ALL -> AndroidColor.parseColor("#1F8A5B")
 }
 
@@ -199,11 +202,12 @@ private fun createSelectedSpotBadge(context: Context, title: String): Drawable {
     return BitmapDrawable(context.resources, bmp)
 }
 
-private fun fitBoundingBox(mapView: MapView, points: List<GeoPoint>, animate: Boolean) {
+private fun fitBoundingBoxSafely(mapView: MapView, points: List<GeoPoint>) {
     if (points.isEmpty()) return
+    mapView.controller.stopAnimation(false)
     if (points.size == 1) {
-        mapView.controller.setZoom(16.2)
-        if (animate) mapView.controller.animateTo(points.first()) else mapView.controller.setCenter(points.first())
+        mapView.controller.setZoom(15.8)
+        mapView.controller.setCenter(points.first())
         return
     }
     var minLat = Double.POSITIVE_INFINITY
@@ -216,18 +220,24 @@ private fun fitBoundingBox(mapView: MapView, points: List<GeoPoint>, animate: Bo
         if (p.longitude < minLng) minLng = p.longitude
         if (p.longitude > maxLng) maxLng = p.longitude
     }
-    val latSpan = max(0.0022, (maxLat - minLat) * 1.32)
-    val lngSpan = max(0.0022, (maxLng - minLng) * 1.32)
+    val latSpan = max(0.0022, (maxLat - minLat) * 1.30).coerceAtMost(8.0)
+    val lngSpan = max(0.0022, (maxLng - minLng) * 1.30).coerceAtMost(8.0)
     val cLat = (minLat + maxLat) / 2.0
     val cLng = (minLng + maxLng) / 2.0
     val box = BoundingBox(
-        cLat + latSpan / 2.0,
-        cLng + lngSpan / 2.0,
-        cLat - latSpan / 2.0,
-        cLng - lngSpan / 2.0
+        (cLat + latSpan / 2.0).coerceIn(-85.0, 85.0),
+        (cLng + lngSpan / 2.0).coerceIn(-180.0, 180.0),
+        (cLat - latSpan / 2.0).coerceIn(-85.0, 85.0),
+        (cLng - lngSpan / 2.0).coerceIn(-180.0, 180.0)
     )
     mapView.post {
-        runCatching { mapView.zoomToBoundingBox(box, animate, 72) }
+        if (mapView.isAttachedToWindow && mapView.width > 0 && mapView.height > 0) {
+            runCatching {
+                mapView.controller.stopAnimation(false)
+                // Non-animated zoomToBoundingBox avoids osmdroid MapController animation lockups on repeated clicks
+                mapView.zoomToBoundingBox(box, false, 64)
+            }
+        }
     }
 }
 
@@ -256,6 +266,21 @@ fun NearbyNavigationMap(
 
     remember(context) { NearbyMapInitializer.ensureConfigured(context) }
 
+    // Pre-cache pin & user drawables once so marker redraws allocate zero bitmaps
+    val pinCache = remember(context) {
+        NearbySpotCategory.entries.associateWith { cat ->
+            val color = categoryPinColor(cat)
+            createSpotPinDrawable(context, color, isSelected = false) to
+                createSpotPinDrawable(context, color, isSelected = true)
+        }
+    }
+    val userDrawable = remember(context) { createUserPulseDrawable(context) }
+
+    val spotsFolder = remember { FolderOverlay() }
+    val routeFolder = remember { FolderOverlay() }
+    val userFolder = remember { FolderOverlay() }
+    val selectedBadgeFolder = remember { FolderOverlay() }
+
     val mapView = remember {
         MapView(context).apply {
             setTileSource(NearbyMapInitializer.resolveTileSource(mapStyle))
@@ -266,6 +291,10 @@ fun NearbyNavigationMap(
             maxZoomLevel = 20.0
             controller.setZoom(14.8)
             controller.setCenter(GeoPoint(13.7563, 100.5018))
+            overlays.add(spotsFolder)
+            overlays.add(routeFolder)
+            overlays.add(userFolder)
+            overlays.add(selectedBadgeFolder)
             setOnTouchListener { v, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> v.parent?.requestDisallowInterceptTouchEvent(true)
@@ -291,7 +320,10 @@ fun NearbyNavigationMap(
     }
     DisposableEffect(mapView) {
         onDispose {
-            runCatching { mapView.onDetach() }
+            runCatching {
+                mapView.controller.stopAnimation(false)
+                mapView.onDetach()
+            }
         }
     }
 
@@ -299,21 +331,47 @@ fun NearbyNavigationMap(
         mapView.setTileSource(NearbyMapInitializer.resolveTileSource(mapStyle))
     }
 
-    LaunchedEffect(spots, selectedSpot, activeRoute, userLat, userLng, accuracyMeters, isNavigatingLive) {
-        mapView.overlays.clear()
+    // Layer 1: Workout spot markers (only updated when spots list or selectedSpot ID changes)
+    LaunchedEffect(spots, selectedSpot?.id) {
+        spotsFolder.items.clear()
+        selectedBadgeFolder.items.clear()
 
-        // 1. User GPS accuracy ring
-        if (userLat != null && userLng != null && accuracyMeters != null && accuracyMeters in 2f..250f) {
-            val circle = Polygon(mapView).apply {
-                points = Polygon.pointsAsCircle(GeoPoint(userLat, userLng), accuracyMeters.toDouble())
-                fillPaint.color = AndroidColor.argb(30, 16, 185, 129)
-                outlinePaint.color = AndroidColor.argb(120, 16, 185, 129)
-                outlinePaint.strokeWidth = 2f
+        val sortedForZOrder = spots.sortedBy { it.id == selectedSpot?.id }
+        for (spot in sortedForZOrder) {
+            val isSelected = spot.id == selectedSpot?.id
+            val pair = pinCache[spot.category] ?: pinCache.getValue(NearbySpotCategory.ALL)
+            val marker = Marker(mapView).apply {
+                position = GeoPoint(spot.lat, spot.lng)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                infoWindow = null
+                icon = if (isSelected) pair.second else pair.first
+                setOnMarkerClickListener { _, _ ->
+                    onSpotClickLatest(spot)
+                    true
+                }
             }
-            mapView.overlays.add(circle)
-        }
+            spotsFolder.add(marker)
 
-        // 2. Navigation Route Polyline
+            if (isSelected) {
+                val badge = Marker(mapView).apply {
+                    position = GeoPoint(spot.lat, spot.lng)
+                    setAnchor(Marker.ANCHOR_CENTER, 2.0f)
+                    infoWindow = null
+                    icon = createSelectedSpotBadge(context, spot.name)
+                    setOnMarkerClickListener { _, _ ->
+                        onSpotClickLatest(spot)
+                        true
+                    }
+                }
+                selectedBadgeFolder.add(badge)
+            }
+        }
+        mapView.invalidate()
+    }
+
+    // Layer 2: Active Route Polyline (decoupled from 200+ spot markers for instant redraws)
+    LaunchedEffect(activeRoute, isNavigatingLive) {
+        routeFolder.items.clear()
         if (activeRoute != null && activeRoute.polyline.size >= 2) {
             val routeGeo = activeRoute.polyline.map { GeoPoint(it.lat, it.lng) }
             val casing = Polyline(mapView).apply {
@@ -322,6 +380,7 @@ fun NearbyNavigationMap(
                 outlinePaint.strokeWidth = 17f
                 outlinePaint.strokeCap = Paint.Cap.ROUND
                 outlinePaint.strokeJoin = Paint.Join.ROUND
+                infoWindow = null
             }
             val mainLine = Polyline(mapView).apply {
                 setPoints(routeGeo)
@@ -333,57 +392,36 @@ fun NearbyNavigationMap(
                 outlinePaint.strokeWidth = 11f
                 outlinePaint.strokeCap = Paint.Cap.ROUND
                 outlinePaint.strokeJoin = Paint.Join.ROUND
+                infoWindow = null
             }
-            mapView.overlays.add(casing)
-            mapView.overlays.add(mainLine)
+            routeFolder.add(casing)
+            routeFolder.add(mainLine)
         }
+        mapView.invalidate()
+    }
 
-        // 3. Nearby Workout Spot Markers (draw unselected first, selected last on top)
-        val sortedForZOrder = spots.sortedBy { it.id == selectedSpot?.id }
-        for (spot in sortedForZOrder) {
-            val isSelected = spot.id == selectedSpot?.id
-            val marker = Marker(mapView).apply {
-                position = GeoPoint(spot.lat, spot.lng)
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                title = spot.name
-                snippet = "${spot.categoryDetailThai} • ${NearbySpotsRepository.formatSpotDistanceThai(spot.distanceMeters)}"
-                icon = createSpotPinDrawable(
-                    context = context,
-                    fillColor = categoryPinColor(spot.category),
-                    isSelected = isSelected
-                )
-                setOnMarkerClickListener { _, _ ->
-                    onSpotClickLatest(spot)
-                    true
-                }
+    // Layer 3: User GPS Pulse & Accuracy Circle
+    LaunchedEffect(userLat, userLng, accuracyMeters, searchCenterLat, searchCenterLng, followUser, isNavigatingLive) {
+        userFolder.items.clear()
+        if (userLat != null && userLng != null && accuracyMeters != null && accuracyMeters in 2f..250f) {
+            val circle = Polygon(mapView).apply {
+                points = Polygon.pointsAsCircle(GeoPoint(userLat, userLng), accuracyMeters.toDouble())
+                fillPaint.color = AndroidColor.argb(30, 16, 185, 129)
+                outlinePaint.color = AndroidColor.argb(120, 16, 185, 129)
+                outlinePaint.strokeWidth = 2f
+                infoWindow = null
             }
-            mapView.overlays.add(marker)
-
-            if (isSelected) {
-                val badge = Marker(mapView).apply {
-                    position = GeoPoint(spot.lat, spot.lng)
-                    setAnchor(Marker.ANCHOR_CENTER, 2.0f)
-                    icon = createSelectedSpotBadge(context, spot.name)
-                    setOnMarkerClickListener { _, _ ->
-                        onSpotClickLatest(spot)
-                        true
-                    }
-                }
-                mapView.overlays.add(badge)
-            }
+            userFolder.add(circle)
         }
-
-        // 4. Current User Marker
         if (userLat != null && userLng != null) {
             val userMarker = Marker(mapView).apply {
                 position = GeoPoint(userLat, userLng)
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                title = "ตำแหน่งของคุณ"
-                icon = createUserPulseDrawable(context)
+                infoWindow = null
+                icon = userDrawable
             }
-            mapView.overlays.add(userMarker)
+            userFolder.add(userMarker)
         }
-
         mapView.invalidate()
 
         val focusLat = searchCenterLat ?: userLat
@@ -392,10 +430,12 @@ fun NearbyNavigationMap(
             val pt = GeoPoint(focusLat, focusLng)
             if (!hasInitialCentered) {
                 hasInitialCentered = true
+                mapView.controller.stopAnimation(false)
                 mapView.controller.setZoom(14.8)
                 mapView.controller.setCenter(pt)
             } else if (followUser && isNavigatingLive && userLat != null && userLng != null) {
-                mapView.controller.animateTo(GeoPoint(userLat, userLng))
+                mapView.controller.stopAnimation(false)
+                mapView.controller.setCenter(GeoPoint(userLat, userLng))
             }
         }
     }
@@ -404,13 +444,14 @@ fun NearbyNavigationMap(
         if (fitRouteTick > 0) {
             val routePts = activeRoute?.polyline?.map { GeoPoint(it.lat, it.lng) }
             if (!routePts.isNullOrEmpty()) {
-                fitBoundingBox(mapView, routePts, animate = true)
+                fitBoundingBoxSafely(mapView, routePts)
             } else if (selectedSpot != null && userLat != null && userLng != null) {
-                fitBoundingBox(
+                fitBoundingBoxSafely(
                     mapView,
-                    listOf(GeoPoint(userLat, userLng), GeoPoint(selectedSpot.lat, selectedSpot.lng)),
-                    animate = true
+                    listOf(GeoPoint(userLat, userLng), GeoPoint(selectedSpot.lat, selectedSpot.lng))
                 )
+            } else if (selectedSpot != null) {
+                fitBoundingBoxSafely(mapView, listOf(GeoPoint(selectedSpot.lat, selectedSpot.lng)))
             }
         }
     }
@@ -420,8 +461,9 @@ fun NearbyNavigationMap(
             val targetLat = searchCenterLat ?: userLat
             val targetLng = searchCenterLng ?: userLng
             if (targetLat != null && targetLng != null) {
+                mapView.controller.stopAnimation(false)
                 mapView.controller.setZoom(if (isNavigatingLive) 17.0 else 15.0)
-                mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
+                mapView.controller.setCenter(GeoPoint(targetLat, targetLng))
             }
         }
     }

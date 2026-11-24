@@ -107,6 +107,7 @@ class NearbySpotsViewModel(
     private var routeFetchJob: Job? = null
     private var searchJob: Job? = null
     private var gpsFallbackWatchdogJob: Job? = null
+    private val routeCache = LinkedHashMap<String, NavigationRouteResult>(48, 0.75f, true)
 
     private val fusedCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -669,14 +670,32 @@ class NearbySpotsViewModel(
     }
 
     fun selectSpot(spot: WorkoutSpot, startNavigationImmediately: Boolean = false) {
+        val currentState = _uiState.value
+        val isSameSpot = currentState.selectedSpot?.id == spot.id
+        val preservedRoute = if (isSameSpot) currentState.activeRoute else null
+
+        if (isSameSpot && preservedRoute != null && startNavigationImmediately && !currentState.isRouting) {
+            _uiState.update {
+                it.copy(
+                    isNavigatingLive = true,
+                    followUserOnMap = true,
+                    hasArrived = false,
+                    currentStepIndex = 0,
+                    fitRouteTick = it.fitRouteTick + 1
+                )
+            }
+            return
+        }
+
         _uiState.update {
             it.copy(
                 selectedSpot = spot,
+                activeRoute = preservedRoute,
                 placeSuggestions = emptyList(),
                 isNavigatingLive = startNavigationImmediately,
                 hasArrived = false,
                 currentStepIndex = 0,
-                remainingDistanceMeters = spot.distanceMeters,
+                remainingDistanceMeters = preservedRoute?.totalDistanceMeters ?: spot.distanceMeters,
                 routingError = null,
                 searchCenterLat = if (it.userLat == null) spot.lat else it.searchCenterLat,
                 searchCenterLng = if (it.userLng == null) spot.lng else it.searchCenterLng,
@@ -718,10 +737,11 @@ class NearbySpotsViewModel(
                 followUserOnMap = true,
                 hasArrived = false,
                 currentStepIndex = 0,
-                recenterTick = it.recenterTick + 1
+                fitRouteTick = if (it.activeRoute != null) it.fitRouteTick + 1 else it.fitRouteTick,
+                recenterTick = if (it.activeRoute == null) it.recenterTick + 1 else it.recenterTick
             )
         }
-        if (_uiState.value.activeRoute == null) {
+        if (_uiState.value.activeRoute == null && !_uiState.value.isRouting) {
             requestRouteToSpot(spot, _uiState.value.travelMode, autoFit = true)
         }
     }
@@ -757,6 +777,24 @@ class NearbySpotsViewModel(
         val origLat = state.userLat ?: state.searchCenterLat ?: return
         val origLng = state.userLng ?: state.searchCenterLng ?: return
 
+        val cacheKey = "${spot.id}_${mode.name}_${(origLat * 2000).roundToInt()}_${(origLng * 2000).roundToInt()}"
+        val cachedRoute = routeCache[cacheKey]
+        if (cachedRoute != null) {
+            routeFetchJob?.cancel()
+            lastRouteOrigin = GeoCoord(origLat, origLng)
+            _uiState.update { curr ->
+                curr.copy(
+                    isRouting = false,
+                    routingError = null,
+                    activeRoute = cachedRoute,
+                    currentStepIndex = 0,
+                    remainingDistanceMeters = cachedRoute.totalDistanceMeters,
+                    fitRouteTick = if (autoFit) curr.fitRouteTick + 1 else curr.fitRouteTick
+                )
+            }
+            return
+        }
+
         routeFetchJob?.cancel()
         routeFetchJob = viewModelScope.launch {
             _uiState.update { it.copy(isRouting = true, routingError = null) }
@@ -770,15 +808,23 @@ class NearbySpotsViewModel(
             )
             result.fold(
                 onSuccess = { route ->
+                    if (routeCache.size >= 40) {
+                        routeCache.keys.firstOrNull()?.let { routeCache.remove(it) }
+                    }
+                    routeCache[cacheKey] = route
                     _uiState.update { curr ->
-                        curr.copy(
-                            isRouting = false,
-                            routingError = null,
-                            activeRoute = route,
-                            currentStepIndex = 0,
-                            remainingDistanceMeters = route.totalDistanceMeters,
-                            fitRouteTick = if (autoFit) curr.fitRouteTick + 1 else curr.fitRouteTick
-                        )
+                        if (curr.selectedSpot?.id != spot.id) {
+                            curr
+                        } else {
+                            curr.copy(
+                                isRouting = false,
+                                routingError = null,
+                                activeRoute = route,
+                                currentStepIndex = 0,
+                                remainingDistanceMeters = route.totalDistanceMeters,
+                                fitRouteTick = if (autoFit) curr.fitRouteTick + 1 else curr.fitRouteTick
+                            )
+                        }
                     }
                 },
                 onFailure = { err ->
@@ -807,7 +853,8 @@ class NearbySpotsViewModel(
                 spot.name.lowercase().contains(cleanQ) ||
                 spot.categoryDetailThai.lowercase().contains(cleanQ) ||
                 (spot.addressSummary?.lowercase()?.contains(cleanQ) == true) ||
-                (spot.sportTags?.lowercase()?.contains(cleanQ) == true)
+                (spot.sportTags?.lowercase()?.contains(cleanQ) == true) ||
+                spot.sportBadgesThai.any { it.lowercase().contains(cleanQ) }
             catMatch && qMatch
         }
 

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,18 +44,21 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.GpsFixed
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.Park
+import androidx.compose.material.icons.rounded.Phone
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Pool
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SportsBasketball
+import androidx.compose.material.icons.rounded.SportsMartialArts
 import androidx.compose.material.icons.rounded.Straight
 import androidx.compose.material.icons.rounded.TurnLeft
 import androidx.compose.material.icons.rounded.TurnRight
@@ -228,7 +232,7 @@ fun NearbySpotsScreen(
                             onRequestLocation = requestLocationPermissions,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(if (uiState.isNavigatingLive) 310.dp else 245.dp)
+                                .height(265.dp)
                         )
                     }
 
@@ -943,15 +947,27 @@ private fun SelectedSpotNavigationCard(
                 }
             }
 
-            if (!spot.addressSummary.isNullOrBlank() || !spot.openingHours.isNullOrBlank()) {
+            val hasRichDetails = !spot.addressSummary.isNullOrBlank() ||
+                !spot.openingHours.isNullOrBlank() ||
+                spot.sportBadgesThai.isNotEmpty() ||
+                spot.isIndoor != null ||
+                !spot.surfaceThai.isNullOrBlank() ||
+                spot.hasLighting != null ||
+                !spot.feeInfoThai.isNullOrBlank() ||
+                !spot.accessThai.isNullOrBlank() ||
+                !spot.operatorName.isNullOrBlank() ||
+                !spot.phone.isNullOrBlank() ||
+                !spot.website.isNullOrBlank()
+
+            if (hasRichDetails) {
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         if (!spot.addressSummary.isNullOrBlank()) {
                             Text(
@@ -960,6 +976,11 @@ private fun SelectedSpotNavigationCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        Text(
+                            text = "พิกัด: ${String.format(java.util.Locale.US, "%.5f, %.5f", spot.lat, spot.lng)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        )
                         if (!spot.openingHours.isNullOrBlank()) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -972,10 +993,105 @@ private fun SelectedSpotNavigationCard(
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Text(
-                                    text = "เวลาเปิด: ${spot.openingHours}",
+                                    text = "เวลาเปิด-ปิด: ${spot.openingHours}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                            }
+                        }
+                        if (!spot.operatorName.isNullOrBlank()) {
+                            Text(
+                                text = "ผู้ดูแล/องค์กร: ${spot.operatorName}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        val attributeTags = listOfNotNull(
+                            when (spot.isIndoor) {
+                                true -> "ในร่ม"
+                                false -> "กลางแจ้ง"
+                                null -> null
+                            },
+                            spot.surfaceThai,
+                            if (spot.hasLighting == true) "มีไฟส่องสว่างกลางคืน" else null,
+                            spot.feeInfoThai,
+                            spot.accessThai
+                        )
+                        if (attributeTags.isNotEmpty() || spot.sportBadgesThai.isNotEmpty()) {
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(spot.sportBadgesThai, key = { "sp_$it" }) { sportName ->
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = EmeraldVibrant.copy(alpha = 0.14f)
+                                    ) {
+                                        Text(
+                                            text = sportName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                                items(attributeTags, key = { "attr_$it" }) { attr ->
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
+                                    ) {
+                                        Text(
+                                            text = attr,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if (!spot.phone.isNullOrBlank() || !spot.website.isNullOrBlank()) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (!spot.phone.isNullOrBlank()) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            runCatching {
+                                                val dial = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${spot.phone}"))
+                                                context.startActivity(dial)
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .testTag("call_spot_button")
+                                    ) {
+                                        Icon(Icons.Rounded.Phone, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(spot.phone, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                                    }
+                                }
+                                if (!spot.website.isNullOrBlank()) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            runCatching {
+                                                val webUrl = if (spot.website.startsWith("http")) spot.website else "https://${spot.website}"
+                                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)))
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .testTag("website_spot_button")
+                                    ) {
+                                        Icon(Icons.Rounded.Language, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("เว็บไซต์/เพจ", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                                    }
+                                }
                             }
                         }
                     }
@@ -1500,6 +1616,29 @@ private fun NearbySpotRowCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+                val compactTags = buildList {
+                    addAll(spot.sportBadgesThai.take(3))
+                    if (spot.isIndoor == true) add("ในร่ม")
+                    else if (spot.isIndoor == false) add("กลางแจ้ง")
+                    if (spot.feeInfoThai == "เข้าใช้บริการฟรี") add("เข้าฟรี")
+                    if (spot.hasLighting == true) add("มีไฟกลางคืน")
+                }.take(3)
+                if (compactTags.isNotEmpty() || !spot.openingHours.isNullOrBlank()) {
+                    val summaryLine = buildString {
+                        if (compactTags.isNotEmpty()) append(compactTags.joinToString(" • "))
+                        if (!spot.openingHours.isNullOrBlank()) {
+                            if (isNotEmpty()) append(" | ")
+                            append("เปิด ${spot.openingHours}")
+                        }
+                    }
+                    Text(
+                        text = summaryLine,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
 
             Surface(
@@ -1530,6 +1669,8 @@ private fun categoryIcon(category: NearbySpotCategory): ImageVector = when (cate
     NearbySpotCategory.FITNESS_GYM -> Icons.Rounded.FitnessCenter
     NearbySpotCategory.SPORTS_COURT -> Icons.Rounded.SportsBasketball
     NearbySpotCategory.SWIMMING -> Icons.Rounded.Pool
+    NearbySpotCategory.MARTIAL_WELLNESS -> Icons.Rounded.SportsMartialArts
+    NearbySpotCategory.CYCLING_OUTDOOR -> Icons.AutoMirrored.Rounded.DirectionsBike
 }
 
 private fun categoryColor(category: NearbySpotCategory): Color = when (category) {
@@ -1538,6 +1679,8 @@ private fun categoryColor(category: NearbySpotCategory): Color = when (category)
     NearbySpotCategory.FITNESS_GYM -> AmberWarm
     NearbySpotCategory.SPORTS_COURT -> ForestGreen
     NearbySpotCategory.SWIMMING -> Color(0xFF0284C7)
+    NearbySpotCategory.MARTIAL_WELLNESS -> Color(0xFFDB2777)
+    NearbySpotCategory.CYCLING_OUTDOOR -> Color(0xFF7C3AED)
 }
 
 private fun maneuverIcon(type: String?, modifier: String?): ImageVector = when {

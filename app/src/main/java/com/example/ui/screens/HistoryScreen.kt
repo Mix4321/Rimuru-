@@ -403,7 +403,7 @@ fun HistoryScreen(
 }
 
 @Composable
-private fun WorkoutHistoryRow(
+fun WorkoutHistoryRow(
     session: WorkoutSession,
     onClick: () -> Unit
 ) {
@@ -513,7 +513,7 @@ private fun WorkoutHistoryRow(
 }
 
 @Composable
-private fun WorkoutDetailSheet(
+fun WorkoutDetailSheet(
     session: WorkoutSession,
     streakDays: Int,
     onShare: () -> Unit,

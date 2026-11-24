@@ -330,15 +330,16 @@ fun AuthScreen(
                     }
                 }
                 Text(
-                    text = "MOVE",
+                    text = "GREEN PULSE",
                     style = MaterialTheme.typography.headlineLarge,
                     color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.ExtraBold
                 )
                 Text(
-                    text = "Smart Sports & Activity Tracker",
+                    text = "Train Hard. Live Strong.",
                     style = MaterialTheme.typography.titleSmall,
-                    color = MintBright
+                    color = MintBright,
+                    fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = "AI ตรวจจับท่าออกกำลังกาย นับครั้งอัตโนมัติ และซิงก์สถิติอย่างปลอดภัยบนคลาวด์",

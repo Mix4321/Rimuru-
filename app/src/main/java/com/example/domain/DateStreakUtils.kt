@@ -282,4 +282,61 @@ object DateStreakUtils {
             )
         }
     }
+
+    fun buildLast7DaysCalorieBars(
+        workouts: List<WorkoutSession>,
+        today: String = todayDateString()
+    ): List<Triple<String, Int, Boolean>> {
+        val parser = isoFormat.get()!!
+        val labelFmt = thaiDayShortFormat.get()!!
+        val calByDate = workouts.groupBy {
+            it.activityDate.ifBlank {
+                if (it.startedAtMillis > 0L) dateStringFromMillis(it.startedAtMillis) else ""
+            }
+        }.mapValues { (_, list) -> list.sumOf { max(0, it.caloriesBurned) } }
+
+        return (6 downTo 0).map { daysAgo ->
+            val dateStr = offsetDateString(today, -daysAgo)
+            val dateObj = runCatching { parser.parse(dateStr) }.getOrNull() ?: Date()
+            val label = if (daysAgo == 0) "วันนี้" else labelFmt.format(dateObj)
+            Triple(label, calByDate[dateStr] ?: 0, daysAgo == 0)
+        }
+    }
+
+    fun buildLast4WeeksCalorieBars(
+        workouts: List<WorkoutSession>,
+        today: String = todayDateString()
+    ): List<Triple<String, Int, Boolean>> {
+        val parser = isoFormat.get()!!
+        val todayDate = runCatching { parser.parse(today) }.getOrNull() ?: Date()
+        val calToday = Calendar.getInstance().apply {
+            time = todayDate
+            set(Calendar.HOUR_OF_DAY, 23)
+            set(Calendar.MINUTE, 59)
+            set(Calendar.SECOND, 59)
+            set(Calendar.MILLISECOND, 999)
+        }
+
+        val labels = listOf("W-3", "W-2", "สัปดาห์ก่อน", "สัปดาห์นี้")
+        val weekCalories = IntArray(4)
+
+        for (w in workouts) {
+            val dayStr = w.activityDate.ifBlank {
+                if (w.startedAtMillis > 0L) dateStringFromMillis(w.startedAtMillis) else ""
+            }
+            val parsed = runCatching { parser.parse(dayStr) }.getOrNull() ?: continue
+            val diffMillis = calToday.timeInMillis - parsed.time
+            if (diffMillis < 0) continue
+            val diffDays = (diffMillis / (24L * 60L * 60L * 1000L)).toInt()
+            val weekBucketFromEnd = diffDays / 7
+            if (weekBucketFromEnd in 0..3) {
+                val idx = 3 - weekBucketFromEnd
+                weekCalories[idx] += max(0, w.caloriesBurned)
+            }
+        }
+
+        return (0..3).map { idx ->
+            Triple(labels[idx], weekCalories[idx], idx == 3)
+        }
+    }
 }
