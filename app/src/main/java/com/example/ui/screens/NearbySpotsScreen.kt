@@ -29,6 +29,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsBike
 import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
@@ -85,8 +87,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -148,6 +152,8 @@ fun NearbySpotsScreen(
             NearbyHeaderControls(
                 uiState = uiState,
                 onSearchChange = viewModel::onSearchQueryChanged,
+                onSubmitSearch = viewModel::submitSearch,
+                onClearSearch = viewModel::clearSearchAndShowAllNearby,
                 onSelectSuggestion = viewModel::selectPlaceSuggestion,
                 onResetGps = viewModel::resetToGpsLocation,
                 onSelectRadius = viewModel::selectRadius,
@@ -187,8 +193,11 @@ fun NearbySpotsScreen(
                         onStopLiveNav = viewModel::stopLiveNavigation,
                         onStartWorkoutAtSpot = onStartWorkoutAtSpot,
                         onRequestLocation = requestLocationPermissions,
-                        onExpandRadius = { viewModel.selectRadius(10_000) },
-                        onRetryFetch = { viewModel.fetchNearbySpots() },
+                        onExpandToUnlimited = { viewModel.selectRadius(NearbySpotsRepository.UNLIMITED_RADIUS_METERS) },
+                        onClearSearch = viewModel::clearSearchAndShowAllNearby,
+                        onRetryFetch = {
+                            if (uiState.isSearchModeActive) viewModel.submitSearch() else viewModel.fetchNearbySpots()
+                        },
                         modifier = Modifier
                             .weight(0.9f)
                             .fillMaxHeight()
@@ -232,7 +241,7 @@ fun NearbySpotsScreen(
                         }
                     }
 
-                    if (!uiState.hasLocationPermission && uiState.searchCenterLat == null) {
+                    if (!uiState.hasLocationPermission && uiState.searchCenterLat == null && !uiState.isSearchModeActive) {
                         item(key = "location_permission_card") {
                             LocationPermissionPromptCard(onRequestLocation = requestLocationPermissions)
                         }
@@ -241,8 +250,11 @@ fun NearbySpotsScreen(
                     item(key = "spots_section_header") {
                         SpotsListSectionHeader(
                             uiState = uiState,
-                            onExpandRadius = { viewModel.selectRadius(10_000) },
-                            onRetryFetch = { viewModel.fetchNearbySpots() }
+                            onExpandToUnlimited = { viewModel.selectRadius(NearbySpotsRepository.UNLIMITED_RADIUS_METERS) },
+                            onClearSearch = viewModel::clearSearchAndShowAllNearby,
+                            onRetryFetch = {
+                                if (uiState.isSearchModeActive) viewModel.submitSearch() else viewModel.fetchNearbySpots()
+                            }
                         )
                     }
 
@@ -270,12 +282,15 @@ fun NearbySpotsScreen(
 private fun NearbyHeaderControls(
     uiState: NearbySpotsUiState,
     onSearchChange: (String) -> Unit,
+    onSubmitSearch: () -> Unit,
+    onClearSearch: () -> Unit,
     onSelectSuggestion: (com.example.data.remote.SearchPlaceSuggestion) -> Unit,
     onResetGps: () -> Unit,
     onSelectRadius: (Int) -> Unit,
     onSelectCategory: (NearbySpotCategory) -> Unit,
     onRefreshSpots: () -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -298,7 +313,7 @@ private fun NearbyHeaderControls(
                     text = if (uiState.searchAreaLabel != null) {
                         "กำลังค้นหารอบพื้นที่: ${uiState.searchAreaLabel}"
                     } else {
-                        "รวบรวมสวน ลู่วิ่ง ฟิตเนส และสนามกีฬาที่ใกล้ที่สุดพร้อมนำทาง"
+                        "ไม่จำกัดรัศมี • ค้นหาสวน ฟิตเนส และสนามกีฬาพร้อมนำทาง"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -340,15 +355,58 @@ private fun NearbyHeaderControls(
         OutlinedTextField(
             value = uiState.searchQuery,
             onValueChange = onSearchChange,
-            placeholder = { Text("ค้นหาชื่อสถานที่ ย่าน หรือสวนสาธารณะ...") },
+            placeholder = { Text("ค้นหาชื่อสวน ฟิตเนส สนามกีฬา หรือย่าน...") },
             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
             trailingIcon = {
-                if (uiState.searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { onSearchChange("") }) {
-                        Icon(Icons.Rounded.Close, contentDescription = "ล้างคำค้นหา")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.padding(end = 4.dp)
+                ) {
+                    if (uiState.isSearchingPlaces) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp)
+                                .size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                    if (uiState.searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = onClearSearch,
+                            modifier = Modifier.testTag("clear_nearby_search_button")
+                        ) {
+                            Icon(Icons.Rounded.Close, contentDescription = "ล้างคำค้นหา")
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = ForestGreen,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .bounceClickable {
+                                    focusManager.clearFocus()
+                                    onSubmitSearch()
+                                }
+                                .testTag("submit_nearby_search_button")
+                        ) {
+                            Text(
+                                text = "ค้นหา",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                            )
+                        }
                     }
                 }
             },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(
+                onSearch = {
+                    focusManager.clearFocus()
+                    onSubmitSearch()
+                }
+            ),
             singleLine = true,
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier
@@ -356,7 +414,7 @@ private fun NearbyHeaderControls(
                 .testTag("nearby_search_input")
         )
 
-        AnimatedVisibility(visible = uiState.placeSuggestions.isNotEmpty()) {
+        AnimatedVisibility(visible = uiState.placeSuggestions.isNotEmpty() && uiState.searchQuery.trim().length >= 2) {
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -365,12 +423,22 @@ private fun NearbyHeaderControls(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    Text(
+                        text = "ย้ายศูนย์กลางค้นหาไปยังย่าน/พื้นที่:",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                    )
                     uiState.placeSuggestions.take(4).forEachIndexed { idx, suggestion ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .bounceClickable { onSelectSuggestion(suggestion) }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                                .bounceClickable {
+                                    focusManager.clearFocus()
+                                    onSelectSuggestion(suggestion)
+                                }
+                                .padding(horizontal = 14.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
@@ -389,7 +457,7 @@ private fun NearbyHeaderControls(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = suggestion.displayName,
+                                    text = "ค้นหารอบบริเวณ: ${suggestion.displayName}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -405,20 +473,36 @@ private fun NearbyHeaderControls(
             }
         }
 
-        // Category + Radius Filter Row
+        // Category + Unlimited/Wide Radius Filter Row
+        val radiusOptions = listOf(
+            NearbySpotsRepository.UNLIMITED_RADIUS_METERS,
+            5_000,
+            20_000,
+            50_000
+        )
+        val countSource = if (uiState.isSearchModeActive) {
+            (uiState.allSpots + uiState.remoteSearchSpots).distinctBy { it.id }
+        } else {
+            uiState.allSpots
+        }
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
-            items(listOf(2000, 5000, 10000), key = { "rad_$it" }) { radius ->
+            items(radiusOptions, key = { "rad_$it" }) { radius ->
                 val selected = uiState.radiusMeters == radius
+                val label = if (radius == NearbySpotsRepository.UNLIMITED_RADIUS_METERS) {
+                    "ไม่จำกัดระยะ"
+                } else {
+                    "รัศมี ${radius / 1000} กม."
+                }
                 FilterChip(
                     selected = selected,
                     onClick = { onSelectRadius(radius) },
                     label = {
                         Text(
-                            text = "รัศมี ${radius / 1000} กม.",
+                            text = label,
                             fontWeight = FontWeight.SemiBold
                         )
                     },
@@ -432,10 +516,24 @@ private fun NearbyHeaderControls(
 
             items(NearbySpotCategory.entries, key = { it.name }) { category ->
                 val selected = uiState.selectedCategory == category
-                val count = if (category == NearbySpotCategory.ALL) {
-                    uiState.allSpots.size
+                val count = if (uiState.isSearchModeActive) {
+                    if (category == NearbySpotCategory.ALL) {
+                        uiState.filteredSpots.size
+                    } else {
+                        countSource.count { spot ->
+                            spot.category == category && (
+                                spot.name.contains(uiState.searchQuery.trim(), ignoreCase = true) ||
+                                    spot.categoryDetailThai.contains(uiState.searchQuery.trim(), ignoreCase = true) ||
+                                    uiState.remoteSearchSpots.any { it.id == spot.id }
+                                )
+                        }
+                    }
                 } else {
-                    uiState.allSpots.count { it.category == category }
+                    if (category == NearbySpotCategory.ALL) {
+                        uiState.allSpots.size
+                    } else {
+                        uiState.allSpots.count { it.category == category }
+                    }
                 }
                 FilterChip(
                     selected = selected,
@@ -542,13 +640,22 @@ private fun NearbyMapPanel(
                             )
                             Text(
                                 text = when {
-                                    !uiState.hasLocationPermission && uiState.searchCenterLat == null ->
-                                        "แตะเปิด GPS เพื่อหาสถานที่ใกล้สุด"
+                                    uiState.isSearchingPlaces -> "กำลังค้นหา \"${uiState.searchQuery.trim()}\"..."
                                     uiState.isLoadingSpots -> "กำลังรวบรวมสถานที่ใกล้ฉัน..."
+                                    uiState.isSearchModeActive && uiState.filteredSpots.isNotEmpty() -> {
+                                        val nearest = uiState.filteredSpots.first()
+                                        "ผลค้นหา ${uiState.filteredSpots.size} แห่ง • ใกล้สุด ${NearbySpotsRepository.formatSpotDistanceThai(nearest.distanceMeters)}"
+                                    }
+                                    uiState.isSearchModeActive ->
+                                        "ไม่พบผลค้นหา \"${uiState.searchQuery.trim()}\""
+                                    !uiState.hasLocationPermission && uiState.searchCenterLat == null ->
+                                        "แตะเปิด GPS หรือพิมพ์ค้นหาสถานที่ด้านบน"
                                     uiState.filteredSpots.isNotEmpty() -> {
                                         val nearest = uiState.filteredSpots.first()
                                         "พบ ${uiState.filteredSpots.size} แห่ง • ใกล้สุด ${NearbySpotsRepository.formatSpotDistanceThai(nearest.distanceMeters)}"
                                     }
+                                    uiState.radiusMeters == NearbySpotsRepository.UNLIMITED_RADIUS_METERS ->
+                                        "ไม่พบสถานที่ออกกำลังกายในบริเวณนี้"
                                     uiState.userLat != null -> "ไม่พบสถานที่ในรัศมี ${uiState.radiusMeters / 1000} กม."
                                     else -> "กำลังจับตำแหน่ง GPS..."
                                 },
@@ -700,7 +807,8 @@ private fun NearbySpotsListColumn(
     onStopLiveNav: () -> Unit,
     onStartWorkoutAtSpot: (SportType) -> Unit,
     onRequestLocation: () -> Unit,
-    onExpandRadius: () -> Unit,
+    onExpandToUnlimited: () -> Unit,
+    onClearSearch: () -> Unit,
     onRetryFetch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -724,7 +832,7 @@ private fun NearbySpotsListColumn(
             }
         }
 
-        if (!uiState.hasLocationPermission && uiState.searchCenterLat == null) {
+        if (!uiState.hasLocationPermission && uiState.searchCenterLat == null && !uiState.isSearchModeActive) {
             item(key = "wide_perm_prompt") {
                 LocationPermissionPromptCard(onRequestLocation = onRequestLocation)
             }
@@ -733,7 +841,8 @@ private fun NearbySpotsListColumn(
         item(key = "wide_section_header") {
             SpotsListSectionHeader(
                 uiState = uiState,
-                onExpandRadius = onExpandRadius,
+                onExpandToUnlimited = onExpandToUnlimited,
+                onClearSearch = onClearSearch,
                 onRetryFetch = onRetryFetch
             )
         }
@@ -1142,9 +1251,16 @@ private fun LocationPermissionPromptCard(onRequestLocation: () -> Unit) {
 @Composable
 private fun SpotsListSectionHeader(
     uiState: NearbySpotsUiState,
-    onExpandRadius: () -> Unit,
+    onExpandToUnlimited: () -> Unit,
+    onClearSearch: () -> Unit,
     onRetryFetch: () -> Unit
 ) {
+    val activeError = if (uiState.isSearchModeActive) {
+        uiState.searchError
+    } else {
+        uiState.spotsError
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1152,18 +1268,38 @@ private fun SpotsListSectionHeader(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "เรียงจากใกล้ฉันที่สุด (${uiState.filteredSpots.size} แห่ง)",
+                text = if (uiState.isSearchModeActive) {
+                    "ผลการค้นหา \"${uiState.searchQuery.trim()}\" (${uiState.filteredSpots.size} แห่ง)"
+                } else {
+                    "เรียงจากใกล้ฉันที่สุด (${uiState.filteredSpots.size} แห่ง)"
+                },
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            if (uiState.radiusMeters < 10_000 && uiState.allSpots.size < 5 && uiState.activeCenterLat != null && !uiState.isLoadingSpots) {
-                TextButton(onClick = onExpandRadius) {
-                    Text("ขยายเป็น 10 กม.", fontWeight = FontWeight.Bold)
+            if (uiState.isSearchModeActive) {
+                TextButton(
+                    onClick = onClearSearch,
+                    modifier = Modifier.testTag("clear_search_results_button")
+                ) {
+                    Text("ล้างคำค้น", fontWeight = FontWeight.Bold)
+                }
+            } else if (uiState.radiusMeters != NearbySpotsRepository.UNLIMITED_RADIUS_METERS &&
+                uiState.allSpots.size < 5 &&
+                uiState.activeCenterLat != null &&
+                !uiState.isLoadingSpots
+            ) {
+                TextButton(onClick = onExpandToUnlimited) {
+                    Text("ไม่จำกัดระยะ", fontWeight = FontWeight.Bold)
                 }
             }
         }
 
-        if (uiState.isLoadingSpots && uiState.allSpots.isEmpty()) {
+        if ((uiState.isLoadingSpots && uiState.allSpots.isEmpty()) ||
+            (uiState.isSearchingPlaces && uiState.filteredSpots.isEmpty())
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1174,12 +1310,16 @@ private fun SpotsListSectionHeader(
                 CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "กำลังรวบรวมสวน ลู่วิ่ง ฟิตเนส และสนามกีฬาใกล้คุณ...",
+                    text = if (uiState.isSearchingPlaces) {
+                        "กำลังค้นหา \"${uiState.searchQuery.trim()}\"..."
+                    } else {
+                        "กำลังรวบรวมสวน ลู่วิ่ง ฟิตเนส และสนามกีฬาใกล้คุณ..."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-        } else if (uiState.spotsError != null) {
+        } else if (activeError != null) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.errorContainer,
@@ -1191,7 +1331,7 @@ private fun SpotsListSectionHeader(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = uiState.spotsError,
+                        text = activeError,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.weight(1f)
@@ -1201,7 +1341,11 @@ private fun SpotsListSectionHeader(
                     }
                 }
             }
-        } else if (uiState.filteredSpots.isEmpty() && uiState.activeCenterLat != null && !uiState.isLoadingSpots) {
+        } else if (uiState.filteredSpots.isEmpty() &&
+            (uiState.isSearchModeActive || uiState.activeCenterLat != null) &&
+            !uiState.isLoadingSpots &&
+            !uiState.isSearchingPlaces
+        ) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -1211,14 +1355,39 @@ private fun SpotsListSectionHeader(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "ไม่พบแหล่งออกกำลังกายที่ตรงเงื่อนไขในรัศมี ${uiState.radiusMeters / 1000} กม.",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    if (uiState.radiusMeters < 10_000) {
-                        OutlinedButton(onClick = onExpandRadius) {
-                            Text("ค้นหาในรัศมี 10 กม.")
+                    if (uiState.isSearchModeActive) {
+                        Text(
+                            text = "ไม่พบแหล่งออกกำลังกายที่ตรงกับ \"${uiState.searchQuery.trim()}\"",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "ลองพิมพ์ชื่อสถานที่ภาษาอังกฤษ/ภาษาไทย หรือเลือกย่านจากรายการแนะนำด้านบน",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedButton(onClick = onClearSearch) {
+                            Text("แสดงสถานที่ใกล้ฉันทั้งหมด")
+                        }
+                    } else if (uiState.radiusMeters == NearbySpotsRepository.UNLIMITED_RADIUS_METERS) {
+                        Text(
+                            text = "ไม่พบแหล่งออกกำลังกายในหมวด \"${uiState.selectedCategory.thaiLabel}\" ในบริเวณนี้",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "ลองเลือกหมวด \"ทั้งหมด\" หรือพิมพ์ค้นหาชื่อสถานที่และย่านที่ต้องการด้านบน",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            text = "ไม่พบแหล่งออกกำลังกายที่ตรงเงื่อนไขในรัศมี ${uiState.radiusMeters / 1000} กม.",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        OutlinedButton(onClick = onExpandToUnlimited) {
+                            Text("ค้นหาแบบไม่จำกัดระยะ")
                         }
                     }
                 }

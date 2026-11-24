@@ -143,4 +143,73 @@ class NearbySpotsParsingTest {
         assertTrue(route.steps[1].instructionThai.contains("เลี้ยวซ้าย"))
         assertTrue(route.steps[2].instructionThai.contains("ถึงสถานที่"))
     }
+
+    @Test
+    fun unlimitedRadiusConstant_isZero() {
+        assertEquals(0, NearbySpotsRepository.UNLIMITED_RADIUS_METERS)
+    }
+
+    @Test
+    fun buildOverpassKeywordQuery_sanitizesRegexAndTargetsWideRadius() {
+        val query = repo.buildOverpassKeywordQuery(
+            keyword = "สวนลุมพินี (Lumpini+Park)",
+            lat = 13.7305,
+            lng = 100.5318,
+            radiusMeters = 120_000
+        )
+
+        assertTrue(query.contains("around:120000,13.730500,100.531800"))
+        assertTrue(query.contains("สวนลุมพินี.*Lumpini.*Park"))
+        assertTrue(query.contains("\"name:th\"~"))
+        assertTrue(query.contains("\"amenity\"=\"gym\""))
+    }
+
+    @Test
+    fun parseNominatimResults_extractsCategoryAndCoordinates() {
+        val sampleNominatim = """
+            [
+              {
+                "name": "สวนเบญจกิติ",
+                "display_name": "สวนเบญจกิติ, คลองเตย, กรุงเทพมหานคร",
+                "lat": "13.7294",
+                "lon": "100.5582",
+                "category": "leisure",
+                "type": "park",
+                "extratags": {
+                  "sport": "running"
+                }
+              },
+              {
+                "name": "Jetts Fitness Asoke",
+                "display_name": "Jetts Fitness Asoke, วัฒนา, กรุงเทพมหานคร",
+                "lat": "13.7370",
+                "lon": "100.5605",
+                "category": "leisure",
+                "type": "fitness_centre",
+                "extratags": {}
+              },
+              {
+                "name": "จตุจักร",
+                "display_name": "จตุจักร, กรุงเทพมหานคร",
+                "lat": "13.8282",
+                "lon": "100.5597",
+                "category": "boundary",
+                "type": "administrative"
+              }
+            ]
+        """.trimIndent()
+
+        val suggestions = repo.parseNominatimResults(sampleNominatim)
+        assertEquals(3, suggestions.size)
+
+        assertEquals("สวนเบญจกิติ", suggestions[0].shortName)
+        assertEquals(NearbySpotCategory.PARK_RUN, suggestions[0].category)
+        assertEquals(13.7294, suggestions[0].lat, 0.0001)
+
+        assertEquals("Jetts Fitness Asoke", suggestions[1].shortName)
+        assertEquals(NearbySpotCategory.FITNESS_GYM, suggestions[1].category)
+
+        assertEquals("จตุจักร", suggestions[2].shortName)
+        assertEquals(null, suggestions[2].category)
+    }
 }

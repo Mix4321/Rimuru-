@@ -48,13 +48,16 @@ data class NearbySpotsUiState(
     val searchAreaLabel: String? = null,
     val accuracyMeters: Float? = null,
     val searchQuery: String = "",
+    val isSearchModeActive: Boolean = false,
     val placeSuggestions: List<SearchPlaceSuggestion> = emptyList(),
     val isSearchingPlaces: Boolean = false,
+    val searchError: String? = null,
     val selectedCategory: NearbySpotCategory = NearbySpotCategory.ALL,
-    val radiusMeters: Int = 5000,
+    val radiusMeters: Int = NearbySpotsRepository.UNLIMITED_RADIUS_METERS,
     val isLoadingSpots: Boolean = false,
     val spotsError: String? = null,
     val allSpots: List<WorkoutSpot> = emptyList(),
+    val remoteSearchSpots: List<WorkoutSpot> = emptyList(),
     val filteredSpots: List<WorkoutSpot> = emptyList(),
     val selectedSpot: WorkoutSpot? = null,
     val travelMode: TravelMode = TravelMode.WALK,
@@ -163,6 +166,12 @@ class NearbySpotsViewModel(
                         handleNewUserLocation(cached)
                     }
                 }
+                client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null)
+                    .addOnSuccessListener { fresh ->
+                        if (fresh != null && _uiState.value.userLat == null) {
+                            handleNewUserLocation(fresh)
+                        }
+                    }
             }
             val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2500L)
                 .setMinUpdateIntervalMillis(1200L)
@@ -217,7 +226,7 @@ class NearbySpotsViewModel(
         val acc = if (location.hasAccuracy()) location.accuracy else null
 
         _uiState.update { state ->
-            val updatedSpots = if (state.searchCenterLat == null) {
+            val updatedAll = if (state.searchCenterLat == null) {
                 state.allSpots.map { spot ->
                     spot.copy(
                         distanceMeters = haversineMeters(lat, lng, spot.lat, spot.lng)
@@ -228,8 +237,23 @@ class NearbySpotsViewModel(
             } else {
                 state.allSpots
             }
+            val updatedRemote = state.remoteSearchSpots.map { spot ->
+                spot.copy(
+                    distanceMeters = haversineMeters(lat, lng, spot.lat, spot.lng)
+                        .roundToInt()
+                        .coerceAtLeast(1)
+                )
+            }.sortedBy { it.distanceMeters }
+
+            val visible = computeVisibleSpots(
+                allSpots = updatedAll,
+                remoteSearchSpots = updatedRemote,
+                isSearchModeActive = state.isSearchModeActive,
+                category = state.selectedCategory,
+                query = state.searchQuery
+            )
             val updatedSelected = state.selectedSpot?.let { sel ->
-                updatedSpots.firstOrNull { it.id == sel.id } ?: sel
+                visible.firstOrNull { it.id == sel.id } ?: sel
             }
             state.copy(
                 isLocating = false,
@@ -237,8 +261,9 @@ class NearbySpotsViewModel(
                 userLat = lat,
                 userLng = lng,
                 accuracyMeters = acc,
-                allSpots = updatedSpots,
-                filteredSpots = filterSpots(updatedSpots, state.selectedCategory, state.searchQuery),
+                allSpots = updatedAll,
+                remoteSearchSpots = updatedRemote,
+                filteredSpots = visible,
                 selectedSpot = updatedSelected
             )
         }
@@ -248,7 +273,6 @@ class NearbySpotsViewModel(
             fetchNearbySpots(centerLat = lat, centerLng = lng)
         }
 
-        // Update live turn-by-turn navigation progress when active
         val state = _uiState.value
         if (state.isNavigatingLive && state.selectedSpot != null) {
             updateLiveNavigationProgress(lat, lng, state.selectedSpot, state.activeRoute)
@@ -266,7 +290,6 @@ class NearbySpotsViewModel(
 
         var nextStepIdx = _uiState.value.currentStepIndex
         if (route != null && route.steps.isNotEmpty()) {
-            // Advance step index when user passes within 28m of the upcoming maneuver point
             for (idx in nextStepIdx until route.steps.lastIndex) {
                 val nextManeuver = route.steps[idx + 1]
                 val distToManeuver = haversineMeters(
@@ -292,7 +315,6 @@ class NearbySpotsViewModel(
             )
         }
 
-        // Re-route cleanly if user moved > 65m away from last routed origin while navigating
         val lastOrig = lastRouteOrigin
         if (!arrived && lastOrig != null && haversineMeters(userLat, userLng, lastOrig.lat, lastOrig.lng) > 65.0) {
             requestRouteToSpot(dest, _uiState.value.travelMode, autoFit = false)
@@ -320,15 +342,21 @@ class NearbySpotsViewModel(
                     }.sortedBy { it.distanceMeters }
 
                     _uiState.update { state ->
-                        val filtered = filterSpots(distanceSorted, state.selectedCategory, state.searchQuery)
+                        val visible = computeVisibleSpots(
+                            allSpots = distanceSorted,
+                            remoteSearchSpots = state.remoteSearchSpots,
+                            isSearchModeActive = state.isSearchModeActive,
+                            category = state.selectedCategory,
+                            query = state.searchQuery
+                        )
                         val preservedSelection = state.selectedSpot?.let { prev ->
-                            distanceSorted.firstOrNull { it.id == prev.id }
+                            visible.firstOrNull { it.id == prev.id } ?: prev
                         }
                         state.copy(
                             isLoadingSpots = false,
                             spotsError = null,
                             allSpots = distanceSorted,
-                            filteredSpots = filtered,
+                            filteredSpots = visible,
                             selectedSpot = preservedSelection
                         )
                     }
@@ -346,32 +374,114 @@ class NearbySpotsViewModel(
     }
 
     fun onSearchQueryChanged(newQuery: String) {
+        val trimmed = newQuery.trim()
+        searchJob?.cancel()
+
+        if (trimmed.isEmpty()) {
+            _uiState.update { state ->
+                state.copy(
+                    searchQuery = "",
+                    isSearchModeActive = false,
+                    isSearchingPlaces = false,
+                    searchError = null,
+                    placeSuggestions = emptyList(),
+                    remoteSearchSpots = emptyList(),
+                    filteredSpots = computeVisibleSpots(
+                        allSpots = state.allSpots,
+                        remoteSearchSpots = emptyList(),
+                        isSearchModeActive = false,
+                        category = state.selectedCategory,
+                        query = ""
+                    )
+                )
+            }
+            return
+        }
+
         _uiState.update { state ->
             state.copy(
                 searchQuery = newQuery,
-                filteredSpots = filterSpots(state.allSpots, state.selectedCategory, newQuery),
-                placeSuggestions = if (newQuery.trim().length < 2) emptyList() else state.placeSuggestions
+                isSearchModeActive = trimmed.length >= 2,
+                searchError = null,
+                filteredSpots = computeVisibleSpots(
+                    allSpots = state.allSpots,
+                    remoteSearchSpots = state.remoteSearchSpots,
+                    isSearchModeActive = trimmed.length >= 2,
+                    category = state.selectedCategory,
+                    query = newQuery
+                )
             )
         }
 
-        searchJob?.cancel()
-        if (newQuery.trim().length >= 2) {
+        if (trimmed.length >= 2) {
             searchJob = viewModelScope.launch {
                 delay(420)
-                _uiState.update { it.copy(isSearchingPlaces = true) }
-                val res = repository.searchPlacesByKeyword(
-                    query = newQuery,
-                    nearLat = _uiState.value.activeCenterLat,
-                    nearLng = _uiState.value.activeCenterLng
-                )
+                executeRemoteSearch(trimmed, recenterToTopIfNeeded = false)
+            }
+        }
+    }
+
+    fun submitSearch() {
+        val trimmed = _uiState.value.searchQuery.trim()
+        if (trimmed.length < 2) return
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            executeRemoteSearch(trimmed, recenterToTopIfNeeded = true)
+        }
+    }
+
+    private suspend fun executeRemoteSearch(query: String, recenterToTopIfNeeded: Boolean) {
+        _uiState.update { it.copy(isSearchingPlaces = true, searchError = null, isSearchModeActive = true) }
+        val stateBefore = _uiState.value
+        val result = repository.searchWorkoutSpotsAndPlaces(
+            query = query,
+            originLat = stateBefore.userLat ?: stateBefore.searchCenterLat,
+            originLng = stateBefore.userLng ?: stateBefore.searchCenterLng
+        )
+        result.fold(
+            onSuccess = { combined ->
+                val uLat = _uiState.value.userLat ?: _uiState.value.searchCenterLat
+                val uLng = _uiState.value.userLng ?: _uiState.value.searchCenterLng
+                val distFixedSpots = if (uLat != null && uLng != null) {
+                    combined.spots.map { s ->
+                        s.copy(distanceMeters = haversineMeters(uLat, uLng, s.lat, s.lng).roundToInt().coerceAtLeast(1))
+                    }.sortedBy { it.distanceMeters }
+                } else {
+                    combined.spots
+                }
+
+                _uiState.update { state ->
+                    val mergedVisible = computeVisibleSpots(
+                        allSpots = state.allSpots,
+                        remoteSearchSpots = distFixedSpots,
+                        isSearchModeActive = true,
+                        category = state.selectedCategory,
+                        query = state.searchQuery
+                    )
+                    val topSpot = mergedVisible.firstOrNull()
+                    val shouldRecenter = recenterToTopIfNeeded && topSpot != null
+                    state.copy(
+                        isSearchingPlaces = false,
+                        searchError = null,
+                        placeSuggestions = combined.areaSuggestions,
+                        remoteSearchSpots = distFixedSpots,
+                        filteredSpots = mergedVisible,
+                        searchCenterLat = if (shouldRecenter && state.userLat == null) topSpot!!.lat else state.searchCenterLat,
+                        searchCenterLng = if (shouldRecenter && state.userLat == null) topSpot!!.lng else state.searchCenterLng,
+                        recenterTick = if (shouldRecenter) state.recenterTick + 1 else state.recenterTick,
+                        followUserOnMap = if (shouldRecenter) false else state.followUserOnMap
+                    )
+                }
+            },
+            onFailure = { err ->
                 _uiState.update {
                     it.copy(
                         isSearchingPlaces = false,
-                        placeSuggestions = res.getOrDefault(emptyList())
+                        searchError = "ค้นหาไม่สำเร็จ (${err.localizedMessage ?: "โปรดตรวจสอบอินเทอร์เน็ต"})"
                     )
                 }
             }
-        }
+        )
     }
 
     fun selectPlaceSuggestion(suggestion: SearchPlaceSuggestion) {
@@ -379,8 +489,11 @@ class NearbySpotsViewModel(
         _uiState.update {
             it.copy(
                 searchQuery = "",
+                isSearchModeActive = false,
                 placeSuggestions = emptyList(),
+                remoteSearchSpots = emptyList(),
                 isSearchingPlaces = false,
+                searchError = null,
                 searchCenterLat = suggestion.lat,
                 searchCenterLng = suggestion.lng,
                 searchAreaLabel = suggestion.shortName,
@@ -389,6 +502,27 @@ class NearbySpotsViewModel(
             )
         }
         fetchNearbySpots(centerLat = suggestion.lat, centerLng = suggestion.lng)
+    }
+
+    fun clearSearchAndShowAllNearby() {
+        searchJob?.cancel()
+        _uiState.update { state ->
+            state.copy(
+                searchQuery = "",
+                isSearchModeActive = false,
+                isSearchingPlaces = false,
+                searchError = null,
+                placeSuggestions = emptyList(),
+                remoteSearchSpots = emptyList(),
+                filteredSpots = computeVisibleSpots(
+                    allSpots = state.allSpots,
+                    remoteSearchSpots = emptyList(),
+                    isSearchModeActive = false,
+                    category = state.selectedCategory,
+                    query = ""
+                )
+            )
+        }
     }
 
     fun resetToGpsLocation() {
@@ -400,7 +534,10 @@ class NearbySpotsViewModel(
                 searchCenterLng = null,
                 searchAreaLabel = null,
                 searchQuery = "",
+                isSearchModeActive = false,
                 placeSuggestions = emptyList(),
+                remoteSearchSpots = emptyList(),
+                searchError = null,
                 followUserOnMap = true,
                 recenterTick = it.recenterTick + 1
             )
@@ -416,7 +553,13 @@ class NearbySpotsViewModel(
         _uiState.update { state ->
             state.copy(
                 selectedCategory = category,
-                filteredSpots = filterSpots(state.allSpots, category, state.searchQuery)
+                filteredSpots = computeVisibleSpots(
+                    allSpots = state.allSpots,
+                    remoteSearchSpots = state.remoteSearchSpots,
+                    isSearchModeActive = state.isSearchModeActive,
+                    category = category,
+                    query = state.searchQuery
+                )
             )
         }
     }
@@ -431,11 +574,15 @@ class NearbySpotsViewModel(
         _uiState.update {
             it.copy(
                 selectedSpot = spot,
+                placeSuggestions = emptyList(),
                 isNavigatingLive = startNavigationImmediately,
                 hasArrived = false,
                 currentStepIndex = 0,
                 remainingDistanceMeters = spot.distanceMeters,
-                routingError = null
+                routingError = null,
+                searchCenterLat = if (it.userLat == null) spot.lat else it.searchCenterLat,
+                searchCenterLng = if (it.userLng == null) spot.lng else it.searchCenterLng,
+                recenterTick = if (it.userLat == null) it.recenterTick + 1 else it.recenterTick
             )
         }
         requestRouteToSpot(spot, _uiState.value.travelMode, autoFit = true)
@@ -548,13 +695,15 @@ class NearbySpotsViewModel(
         }
     }
 
-    private fun filterSpots(
-        spots: List<WorkoutSpot>,
+    private fun computeVisibleSpots(
+        allSpots: List<WorkoutSpot>,
+        remoteSearchSpots: List<WorkoutSpot>,
+        isSearchModeActive: Boolean,
         category: NearbySpotCategory,
         query: String
     ): List<WorkoutSpot> {
         val cleanQ = query.trim().lowercase()
-        return spots.filter { spot ->
+        val localMatches = allSpots.filter { spot ->
             val catMatch = category == NearbySpotCategory.ALL || spot.category == category
             val qMatch = cleanQ.isBlank() ||
                 spot.name.lowercase().contains(cleanQ) ||
@@ -563,6 +712,22 @@ class NearbySpotsViewModel(
                 (spot.sportTags?.lowercase()?.contains(cleanQ) == true)
             catMatch && qMatch
         }
+
+        if (!isSearchModeActive) return localMatches
+
+        val merged = LinkedHashMap<String, WorkoutSpot>()
+        for (spot in localMatches) {
+            val key = "${spot.name.lowercase()}_${(spot.lat * 1000).roundToInt()}_${(spot.lng * 1000).roundToInt()}"
+            merged.putIfAbsent(key, spot)
+        }
+        for (spot in remoteSearchSpots) {
+            val catMatch = category == NearbySpotCategory.ALL || spot.category == category
+            if (catMatch) {
+                val key = "${spot.name.lowercase()}_${(spot.lat * 1000).roundToInt()}_${(spot.lng * 1000).roundToInt()}"
+                merged.putIfAbsent(key, spot)
+            }
+        }
+        return merged.values.sortedBy { it.distanceMeters }
     }
 
     override fun onCleared() {
