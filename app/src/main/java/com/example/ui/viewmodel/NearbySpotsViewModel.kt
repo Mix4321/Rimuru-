@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Build
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
@@ -46,6 +47,7 @@ data class NearbySpotsUiState(
     val searchCenterLat: Double? = null,
     val searchCenterLng: Double? = null,
     val searchAreaLabel: String? = null,
+    val isUsingTemporaryFallback: Boolean = false,
     val accuracyMeters: Float? = null,
     val searchQuery: String = "",
     val isSearchModeActive: Boolean = false,
@@ -104,6 +106,7 @@ class NearbySpotsViewModel(
     private var spotsFetchJob: Job? = null
     private var routeFetchJob: Job? = null
     private var searchJob: Job? = null
+    private var gpsFallbackWatchdogJob: Job? = null
 
     private val fusedCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -147,6 +150,11 @@ class NearbySpotsViewModel(
             startLocationUpdates()
         } else {
             stopLocationUpdates()
+            // Even without GPS permission, auto-populate default Bangkok region once
+            // so the places list & map are immediately useful instead of empty.
+            if (!hasFetchedInitialSpots && _uiState.value.allSpots.isEmpty() && _uiState.value.activeCenterLat == null) {
+                useFallbackLocationIfNeeded()
+            }
         }
     }
 
@@ -157,6 +165,13 @@ class NearbySpotsViewModel(
 
         _uiState.update { it.copy(isLocating = it.userLat == null) }
 
+        // Warm-start immediately from any cached system location provider (GPS / Network / Passive / Fused)
+        findBestCachedSystemLocation()?.let { cached ->
+            if (_uiState.value.userLat == null) {
+                handleNewUserLocation(cached)
+            }
+        }
+
         var started = false
         val client = fusedClient
         if (client != null) {
@@ -166,16 +181,17 @@ class NearbySpotsViewModel(
                         handleNewUserLocation(cached)
                     }
                 }
-                client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null)
+                client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
                     .addOnSuccessListener { fresh ->
-                        if (fresh != null && _uiState.value.userLat == null) {
+                        if (fresh != null) {
                             handleNewUserLocation(fresh)
                         }
                     }
             }
             val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2500L)
                 .setMinUpdateIntervalMillis(1200L)
-                .setMinUpdateDistanceMeters(3f)
+                .setMinUpdateDistanceMeters(0f)
+                .setWaitForAccurateLocation(false)
                 .build()
             runCatching {
                 client.requestLocationUpdates(request, fusedCallback, Looper.getMainLooper())
@@ -184,29 +200,99 @@ class NearbySpotsViewModel(
             }
         }
 
-        if (!started) {
-            val provider = when {
-                runCatching { locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false) ->
-                    LocationManager.GPS_PROVIDER
-                runCatching { locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) }.getOrDefault(false) ->
-                    LocationManager.NETWORK_PROVIDER
-                else -> null
+        // Also register native LocationManager listener as a backup (especially helpful on emulators)
+        val nativeProviders = buildList {
+            if (runCatching { locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)) {
+                add(LocationManager.GPS_PROVIDER)
             }
-            if (provider != null) {
-                runCatching {
-                    locationManager.getLastKnownLocation(provider)?.let { cached ->
-                        if (_uiState.value.userLat == null) handleNewUserLocation(cached)
-                    }
-                    locationManager.requestLocationUpdates(provider, 2500L, 3f, this, Looper.getMainLooper())
-                    started = true
-                }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                runCatching { locationManager.allProviders.contains(LocationManager.FUSED_PROVIDER) }.getOrDefault(false)
+            ) {
+                add(LocationManager.FUSED_PROVIDER)
+            }
+            if (runCatching { locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) }.getOrDefault(false)) {
+                add(LocationManager.NETWORK_PROVIDER)
+            }
+        }
+        for (provider in nativeProviders) {
+            runCatching {
+                locationManager.requestLocationUpdates(provider, 3000L, 0f, this, Looper.getMainLooper())
+                started = true
             }
         }
 
         isLocationListening = started
+
+        // Watchdog: if GPS takes > 3.5s on emulator / indoors, automatically load spots around default center
+        gpsFallbackWatchdogJob?.cancel()
+        if (_uiState.value.userLat == null) {
+            gpsFallbackWatchdogJob = viewModelScope.launch {
+                delay(3500)
+                if (_uiState.value.userLat == null && _uiState.value.searchCenterLat == null) {
+                    useFallbackLocationIfNeeded()
+                }
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun findBestCachedSystemLocation(): Location? {
+        if (!hasLocationPermission()) return null
+        val providers = buildList {
+            add(LocationManager.GPS_PROVIDER)
+            add(LocationManager.NETWORK_PROVIDER)
+            add(LocationManager.PASSIVE_PROVIDER)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(LocationManager.FUSED_PROVIDER)
+            }
+        }
+        return providers.mapNotNull { provider ->
+            runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
+        }.maxByOrNull { it.time }
+    }
+
+    fun useFallbackLocationIfNeeded() {
+        if (_uiState.value.userLat != null || _uiState.value.searchCenterLat != null) {
+            val lat = _uiState.value.activeCenterLat ?: NearbySpotsRepository.DEFAULT_THAILAND_LAT
+            val lng = _uiState.value.activeCenterLng ?: NearbySpotsRepository.DEFAULT_THAILAND_LNG
+            fetchNearbySpots(centerLat = lat, centerLng = lng)
+            return
+        }
+        hasFetchedInitialSpots = true
+        _uiState.update {
+            it.copy(
+                isLocating = false,
+                searchCenterLat = NearbySpotsRepository.DEFAULT_THAILAND_LAT,
+                searchCenterLng = NearbySpotsRepository.DEFAULT_THAILAND_LNG,
+                searchAreaLabel = "กรุงเทพฯ (รอสัญญาณ GPS)",
+                isUsingTemporaryFallback = true,
+                followUserOnMap = false,
+                recenterTick = it.recenterTick + 1
+            )
+        }
+        fetchNearbySpots(
+            centerLat = NearbySpotsRepository.DEFAULT_THAILAND_LAT,
+            centerLng = NearbySpotsRepository.DEFAULT_THAILAND_LNG
+        )
+    }
+
+    fun refreshOrGatherNearbySpots() {
+        val state = _uiState.value
+        val cLat = state.activeCenterLat
+        val cLng = state.activeCenterLng
+        if (cLat != null && cLng != null) {
+            fetchNearbySpots(centerLat = cLat, centerLng = cLng)
+        } else {
+            if (hasLocationPermission()) {
+                isLocationListening = false
+                startLocationUpdates()
+            }
+            useFallbackLocationIfNeeded()
+        }
     }
 
     fun stopLocationUpdates() {
+        gpsFallbackWatchdogJob?.cancel()
         if (!isLocationListening) return
         if (usingFused) {
             runCatching { fusedClient?.removeLocationUpdates(fusedCallback) }
@@ -221,12 +307,15 @@ class NearbySpotsViewModel(
     }
 
     private fun handleNewUserLocation(location: Location) {
+        gpsFallbackWatchdogJob?.cancel()
         val lat = location.latitude
         val lng = location.longitude
         val acc = if (location.hasAccuracy()) location.accuracy else null
+        val wasUsingFallback = _uiState.value.isUsingTemporaryFallback
 
         _uiState.update { state ->
-            val updatedAll = if (state.searchCenterLat == null) {
+            val clearFallback = state.isUsingTemporaryFallback
+            val updatedAll = if (state.searchCenterLat == null || clearFallback) {
                 state.allSpots.map { spot ->
                     spot.copy(
                         distanceMeters = haversineMeters(lat, lng, spot.lat, spot.lng)
@@ -261,6 +350,12 @@ class NearbySpotsViewModel(
                 userLat = lat,
                 userLng = lng,
                 accuracyMeters = acc,
+                searchCenterLat = if (clearFallback) null else state.searchCenterLat,
+                searchCenterLng = if (clearFallback) null else state.searchCenterLng,
+                searchAreaLabel = if (clearFallback) null else state.searchAreaLabel,
+                isUsingTemporaryFallback = false,
+                followUserOnMap = if (clearFallback) true else state.followUserOnMap,
+                recenterTick = if (clearFallback) state.recenterTick + 1 else state.recenterTick,
                 allSpots = updatedAll,
                 remoteSearchSpots = updatedRemote,
                 filteredSpots = visible,
@@ -268,7 +363,7 @@ class NearbySpotsViewModel(
             )
         }
 
-        if (!hasFetchedInitialSpots) {
+        if (!hasFetchedInitialSpots || wasUsingFallback) {
             hasFetchedInitialSpots = true
             fetchNearbySpots(centerLat = lat, centerLng = lng)
         }
@@ -497,6 +592,7 @@ class NearbySpotsViewModel(
                 searchCenterLat = suggestion.lat,
                 searchCenterLng = suggestion.lng,
                 searchAreaLabel = suggestion.shortName,
+                isUsingTemporaryFallback = false,
                 followUserOnMap = false,
                 recenterTick = it.recenterTick + 1
             )
@@ -533,6 +629,7 @@ class NearbySpotsViewModel(
                 searchCenterLat = null,
                 searchCenterLng = null,
                 searchAreaLabel = null,
+                isUsingTemporaryFallback = false,
                 searchQuery = "",
                 isSearchModeActive = false,
                 placeSuggestions = emptyList(),
@@ -545,6 +642,7 @@ class NearbySpotsViewModel(
         if (uLat != null && uLng != null) {
             fetchNearbySpots(centerLat = uLat, centerLng = uLng)
         } else {
+            isLocationListening = false
             startLocationUpdates()
         }
     }

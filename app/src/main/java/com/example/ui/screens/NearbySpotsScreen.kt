@@ -155,10 +155,16 @@ fun NearbySpotsScreen(
                 onSubmitSearch = viewModel::submitSearch,
                 onClearSearch = viewModel::clearSearchAndShowAllNearby,
                 onSelectSuggestion = viewModel::selectPlaceSuggestion,
-                onResetGps = viewModel::resetToGpsLocation,
+                onResetGps = {
+                    if (!uiState.hasLocationPermission && uiState.userLat == null) {
+                        requestLocationPermissions()
+                    } else {
+                        viewModel.resetToGpsLocation()
+                    }
+                },
                 onSelectRadius = viewModel::selectRadius,
                 onSelectCategory = viewModel::selectCategory,
-                onRefreshSpots = { viewModel.fetchNearbySpots() }
+                onRefreshSpots = viewModel::refreshOrGatherNearbySpots
             )
 
             if (isWide) {
@@ -196,7 +202,7 @@ fun NearbySpotsScreen(
                         onExpandToUnlimited = { viewModel.selectRadius(NearbySpotsRepository.UNLIMITED_RADIUS_METERS) },
                         onClearSearch = viewModel::clearSearchAndShowAllNearby,
                         onRetryFetch = {
-                            if (uiState.isSearchModeActive) viewModel.submitSearch() else viewModel.fetchNearbySpots()
+                            if (uiState.isSearchModeActive) viewModel.submitSearch() else viewModel.refreshOrGatherNearbySpots()
                         },
                         modifier = Modifier
                             .weight(0.9f)
@@ -241,7 +247,7 @@ fun NearbySpotsScreen(
                         }
                     }
 
-                    if (!uiState.hasLocationPermission && uiState.searchCenterLat == null && !uiState.isSearchModeActive) {
+                    if (!uiState.hasLocationPermission && !uiState.isSearchModeActive) {
                         item(key = "location_permission_card") {
                             LocationPermissionPromptCard(onRequestLocation = requestLocationPermissions)
                         }
@@ -253,7 +259,7 @@ fun NearbySpotsScreen(
                             onExpandToUnlimited = { viewModel.selectRadius(NearbySpotsRepository.UNLIMITED_RADIUS_METERS) },
                             onClearSearch = viewModel::clearSearchAndShowAllNearby,
                             onRetryFetch = {
-                                if (uiState.isSearchModeActive) viewModel.submitSearch() else viewModel.fetchNearbySpots()
+                                if (uiState.isSearchModeActive) viewModel.submitSearch() else viewModel.refreshOrGatherNearbySpots()
                             }
                         )
                     }
@@ -310,10 +316,13 @@ private fun NearbyHeaderControls(
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 Text(
-                    text = if (uiState.searchAreaLabel != null) {
-                        "กำลังค้นหารอบพื้นที่: ${uiState.searchAreaLabel}"
-                    } else {
-                        "ไม่จำกัดรัศมี • ค้นหาสวน ฟิตเนส และสนามกีฬาพร้อมนำทาง"
+                    text = when {
+                        uiState.isUsingTemporaryFallback ->
+                            "แสดงพื้นที่อ้างอิง: ${uiState.searchAreaLabel ?: "กรุงเทพฯ"} • เปิด GPS เพื่อจัดเรียงใกล้ตัว"
+                        uiState.searchAreaLabel != null ->
+                            "กำลังค้นหารอบพื้นที่: ${uiState.searchAreaLabel}"
+                        else ->
+                            "ไม่จำกัดรัศมี • ค้นหาสวน ฟิตเนส และสนามกีฬาพร้อมนำทาง"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -322,19 +331,20 @@ private fun NearbyHeaderControls(
                 )
             }
 
-            if (uiState.searchAreaLabel != null) {
-                TextButton(
-                    onClick = onResetGps,
-                    modifier = Modifier.testTag("reset_to_gps_button")
-                ) {
-                    Icon(Icons.Rounded.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("ตำแหน่งฉัน", fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (uiState.searchAreaLabel != null) {
+                    TextButton(
+                        onClick = onResetGps,
+                        modifier = Modifier.testTag("reset_to_gps_button")
+                    ) {
+                        Icon(Icons.Rounded.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("ตำแหน่งฉัน", fontWeight = FontWeight.Bold)
+                    }
                 }
-            } else {
                 IconButton(
                     onClick = onRefreshSpots,
-                    enabled = !uiState.isLoadingSpots && uiState.activeCenterLat != null,
+                    enabled = !uiState.isLoadingSpots,
                     modifier = Modifier
                         .size(48.dp)
                         .testTag("refresh_nearby_spots_button")
@@ -344,7 +354,7 @@ private fun NearbyHeaderControls(
                     } else {
                         Icon(
                             imageVector = Icons.Rounded.Refresh,
-                            contentDescription = "อัปเดตสถานที่ใกล้ฉัน",
+                            contentDescription = "รวบรวมสถานที่ใกล้ฉัน",
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
@@ -832,7 +842,7 @@ private fun NearbySpotsListColumn(
             }
         }
 
-        if (!uiState.hasLocationPermission && uiState.searchCenterLat == null && !uiState.isSearchModeActive) {
+        if (!uiState.hasLocationPermission && !uiState.isSearchModeActive) {
             item(key = "wide_perm_prompt") {
                 LocationPermissionPromptCard(onRequestLocation = onRequestLocation)
             }

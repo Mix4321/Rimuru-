@@ -212,4 +212,68 @@ class NearbySpotsParsingTest {
         assertEquals("จตุจักร", suggestions[2].shortName)
         assertEquals(null, suggestions[2].category)
     }
+
+    @Test
+    fun buildOverpassQuery_usesCanonicalOutCenterSyntax() {
+        val query = repo.buildOverpassQuery(13.7563, 100.5018, 8000)
+        assertTrue(query.contains("out center 150;"))
+        assertTrue(!query.contains("out center tags"))
+        assertTrue(query.contains("around:8000,13.756300,100.501800"))
+    }
+
+    @Test
+    fun parsePhotonWorkoutSpots_filtersAndSortsExerciseSpots() {
+        val photonJson = """
+            {
+              "type": "FeatureCollection",
+              "features": [
+                {
+                  "type": "Feature",
+                  "geometry": { "type": "Point", "coordinates": [100.5420, 13.7380] },
+                  "properties": {
+                    "osm_id": 2001,
+                    "osm_key": "leisure",
+                    "osm_value": "park",
+                    "name": "สวนลุมพินี",
+                    "street": "ถนนพระราม 4",
+                    "district": "ปทุมวัน"
+                  }
+                },
+                {
+                  "type": "Feature",
+                  "geometry": { "type": "Point", "coordinates": [100.5330, 13.7310] },
+                  "properties": {
+                    "osm_id": 2002,
+                    "osm_key": "amenity",
+                    "osm_value": "parking",
+                    "name": "Park Hotel Parking"
+                  }
+                },
+                {
+                  "type": "Feature",
+                  "geometry": { "type": "Point", "coordinates": [100.5320, 13.7312] },
+                  "properties": {
+                    "osm_id": 2003,
+                    "osm_key": "leisure",
+                    "osm_value": "fitness_centre",
+                    "name": "Virgin Active Silom"
+                  }
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val filtered = repo.parsePhotonWorkoutSpots(
+            rawJson = photonJson,
+            originLat = 13.7310,
+            originLng = 100.5318,
+            filterExerciseOnly = true
+        )
+        assertEquals(2, filtered.size)
+        assertEquals("Virgin Active Silom", filtered[0].name)
+        assertEquals(NearbySpotCategory.FITNESS_GYM, filtered[0].category)
+        assertEquals("สวนลุมพินี", filtered[1].name)
+        assertEquals(NearbySpotCategory.PARK_RUN, filtered[1].category)
+        assertEquals("ถนนพระราม 4, ปทุมวัน", filtered[1].addressSummary)
+    }
 }

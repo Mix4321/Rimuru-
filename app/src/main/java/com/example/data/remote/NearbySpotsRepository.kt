@@ -99,10 +99,9 @@ class NearbySpotsRepository {
     private val json = Json { ignoreUnknownKeys = true }
 
     /**
-     * Fetches real exercise spots from OpenStreetMap Overpass API.
-     * When [radiusMeters] <= 0 (UNLIMITED_RADIUS_METERS), expands progressively across
-     * 5km -> 20km -> 60km -> 120km rings so users always find the closest available places
-     * even in low-density areas without timing out Overpass.
+     * Fetches real exercise spots from OpenStreetMap Overpass API with automatic
+     * mirror failover and Komoot Photon + Nominatim backup aggregation so spots load reliably
+     * even if Overpass is rate-limited or busy.
      */
     suspend fun fetchNearbySpots(
         userLat: Double,
@@ -110,50 +109,69 @@ class NearbySpotsRepository {
         radiusMeters: Int = UNLIMITED_RADIUS_METERS
     ): Result<List<WorkoutSpot>> = withContext(Dispatchers.IO) {
         runCatching {
+            val collectedByKey = LinkedHashMap<String, WorkoutSpot>()
+            var overpassError: Throwable? = null
+
             if (radiusMeters > 0) {
                 val clamped = radiusMeters.coerceIn(500, MAX_QUERY_RADIUS_METERS)
-                val query = buildOverpassQuery(userLat, userLng, clamped)
-                val raw = executeOverpass(query)
-                return@runCatching parseOverpassSpots(rawJson = raw, originLat = userLat, originLng = userLng)
-            }
-
-            // Progressive unlimited search: expand outward until we collect a healthy set
-            val rings = listOf(5_000, 20_000, 60_000, 120_000)
-            val collectedById = LinkedHashMap<String, WorkoutSpot>()
-            var lastFailure: Throwable? = null
-
-            for ((idx, ringRadius) in rings.withIndex()) {
                 try {
-                    val query = buildOverpassQuery(userLat, userLng, ringRadius)
+                    val query = buildOverpassQuery(userLat, userLng, clamped)
                     val raw = executeOverpass(query)
-                    val parsed = parseOverpassSpots(rawJson = raw, originLat = userLat, originLng = userLng)
-                    for (spot in parsed) {
-                        val key = "${spot.name.lowercase(Locale.ROOT)}_${(spot.lat * 1000).roundToInt()}_${(spot.lng * 1000).roundToInt()}"
-                        collectedById.putIfAbsent(key, spot)
-                    }
-                    val targetCount = when (idx) {
-                        0 -> 18
-                        1 -> 12
-                        2 -> 6
-                        else -> 1
-                    }
-                    if (collectedById.size >= targetCount) break
+                    parseOverpassSpots(rawJson = raw, originLat = userLat, originLng = userLng)
+                        .filter { it.distanceMeters <= clamped + 500 }
+                        .forEach { spot ->
+                            collectedByKey.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+                        }
                 } catch (t: Throwable) {
-                    lastFailure = t
+                    overpassError = t
+                }
+            } else {
+                // Progressive unlimited search: expand outward until we collect nearby spots
+                val rings = listOf(8_000, 25_000, 75_000, 120_000)
+                for ((idx, ringRadius) in rings.withIndex()) {
+                    try {
+                        val query = buildOverpassQuery(userLat, userLng, ringRadius)
+                        val raw = executeOverpass(query)
+                        val parsed = parseOverpassSpots(rawJson = raw, originLat = userLat, originLng = userLng)
+                        for (spot in parsed) {
+                            collectedByKey.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+                        }
+                        val targetCount = when (idx) {
+                            0 -> 14
+                            1 -> 10
+                            2 -> 5
+                            else -> 1
+                        }
+                        if (collectedByKey.size >= targetCount) break
+                    } catch (t: Throwable) {
+                        overpassError = t
+                    }
                 }
             }
 
-            if (collectedById.isEmpty() && lastFailure != null) {
-                throw lastFailure
+            // Fallback / Supplement via Photon & Nominatim if Overpass returned too few or errored
+            if (collectedByKey.size < 5) {
+                val backupResult = runCatching {
+                    fetchNearbyViaPhotonAndNominatim(userLat, userLng, radiusMeters)
+                }
+                backupResult.getOrNull()?.forEach { spot ->
+                    collectedByKey.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+                }
+                if (collectedByKey.isEmpty()) {
+                    throw (overpassError ?: backupResult.exceptionOrNull()
+                        ?: IllegalStateException("ไม่สามารถรวบรวมสถานที่ใกล้คุณได้"))
+                }
             }
-            collectedById.values.sortedBy { it.distanceMeters }
+
+            collectedByKey.values.sortedBy { it.distanceMeters }
         }
     }
 
     /**
-     * Searches real workout spots and places globally/regionally using BOTH:
-     * 1) Overpass keyword regex search within 120 km (or default center if GPS unavailable)
-     * 2) OpenStreetMap Nominatim search (works anywhere with or without GPS)
+     * Searches real workout spots and places globally/regionally using:
+     * 1) Komoot Photon GeoJSON search (fast Thai & English POI lookup)
+     * 2) OpenStreetMap Nominatim search
+     * 3) Overpass keyword regex search within 120 km
      */
     suspend fun searchWorkoutSpotsAndPlaces(
         query: String,
@@ -170,6 +188,19 @@ class NearbySpotsRepository {
             val refLng = originLng ?: DEFAULT_THAILAND_LNG
 
             coroutineScope {
+                val photonDeferred = async {
+                    runCatching {
+                        val url = buildPhotonSearchUrl(clean, originLat, originLng, limit = 15)
+                        val raw = getUrl(url)
+                        parsePhotonWorkoutSpots(
+                            rawJson = raw,
+                            originLat = refLat,
+                            originLng = refLng,
+                            filterExerciseOnly = false
+                        )
+                    }
+                }
+
                 val nominatimDeferred = async {
                     runCatching {
                         val raw = getUrl(buildNominatimSearchUrl(clean, originLat, originLng))
@@ -185,23 +216,28 @@ class NearbySpotsRepository {
                     }
                 }
 
+                val photonRes = photonDeferred.await()
                 val nomRes = nominatimDeferred.await()
                 val ovRes = overpassDeferred.await()
 
-                if (nomRes.isFailure && ovRes.isFailure) {
-                    throw (nomRes.exceptionOrNull() ?: ovRes.exceptionOrNull()
+                if (photonRes.isFailure && nomRes.isFailure && ovRes.isFailure) {
+                    throw (nomRes.exceptionOrNull()
+                        ?: photonRes.exceptionOrNull()
+                        ?: ovRes.exceptionOrNull()
                         ?: IllegalStateException("ไม่สามารถค้นหาสถานที่ได้"))
                 }
 
+                val photonList = photonRes.getOrDefault(emptyList())
                 val nominatimList = nomRes.getOrDefault(emptyList())
                 val overpassList = ovRes.getOrDefault(emptyList())
 
                 val mergedSpots = LinkedHashMap<String, WorkoutSpot>()
                 for (spot in overpassList) {
-                    val key = dedupKeyFor(spot.name, spot.lat, spot.lng)
-                    mergedSpots.putIfAbsent(key, spot)
+                    mergedSpots.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
                 }
-
+                for (spot in photonList) {
+                    mergedSpots.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+                }
                 for (nom in nominatimList) {
                     val key = dedupKeyFor(nom.shortName, nom.lat, nom.lng)
                     if (!mergedSpots.containsKey(key)) {
@@ -284,23 +320,105 @@ class NearbySpotsRepository {
         }
     }
 
+    private fun buildPhotonSearchUrl(
+        query: String,
+        nearLat: Double?,
+        nearLng: Double?,
+        limit: Int = 18
+    ): String {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val bias = if (nearLat != null && nearLng != null) {
+            String.format(Locale.US, "&lat=%.5f&lon=%.5f", nearLat, nearLng)
+        } else {
+            ""
+        }
+        return "https://photon.komoot.io/api/?q=$encoded&limit=$limit$bias"
+    }
+
+    private suspend fun fetchNearbyViaPhotonAndNominatim(
+        lat: Double,
+        lng: Double,
+        radiusMeters: Int
+    ): List<WorkoutSpot> = coroutineScope {
+        val maxDistance = if (radiusMeters > 0) radiusMeters + 500 else MAX_QUERY_RADIUS_METERS
+        val queries = listOf("park", "fitness gym", "stadium sport", "swimming pool")
+        val deferreds = queries.map { q ->
+            async {
+                runCatching {
+                    val raw = getUrl(buildPhotonSearchUrl(q, lat, lng, limit = 18))
+                    parsePhotonWorkoutSpots(
+                        rawJson = raw,
+                        originLat = lat,
+                        originLng = lng,
+                        filterExerciseOnly = true
+                    )
+                }
+            }
+        }
+
+        val collected = LinkedHashMap<String, WorkoutSpot>()
+        var anySuccess = false
+        var lastErr: Throwable? = null
+        for (def in deferreds) {
+            val res = def.await()
+            if (res.isSuccess) {
+                anySuccess = true
+                res.getOrNull()?.filter { it.distanceMeters <= maxDistance }?.forEach { spot ->
+                    collected.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+                }
+            } else {
+                lastErr = res.exceptionOrNull()
+            }
+        }
+
+        if (collected.size < 3) {
+            val nomFallback = runCatching {
+                val raw = getUrl(buildNominatimSearchUrl("park", lat, lng))
+                parseNominatimResults(raw).mapNotNull { sug ->
+                    val dist = haversineMeters(lat, lng, sug.lat, sug.lng).roundToInt().coerceAtLeast(1)
+                    if (dist > maxDistance) return@mapNotNull null
+                    val cat = sug.category ?: NearbySpotCategory.PARK_RUN
+                    WorkoutSpot(
+                        id = "nom_${dedupKeyFor(sug.shortName, sug.lat, sug.lng).hashCode()}",
+                        name = sug.shortName,
+                        category = cat,
+                        categoryDetailThai = sug.detailLabel ?: cat.thaiLabel,
+                        lat = sug.lat,
+                        lng = sug.lng,
+                        distanceMeters = dist,
+                        addressSummary = sug.displayName.substringAfter(",", "").trim().ifBlank { null },
+                        suggestedSport = inferSportFromCategory(cat, sug.shortName)
+                    )
+                }
+            }
+            if (nomFallback.isSuccess) {
+                anySuccess = true
+                nomFallback.getOrNull()?.forEach { spot ->
+                    collected.putIfAbsent(dedupKeyFor(spot.name, spot.lat, spot.lng), spot)
+                }
+            } else if (lastErr == null) {
+                lastErr = nomFallback.exceptionOrNull()
+            }
+        }
+
+        if (!anySuccess && lastErr != null) {
+            throw lastErr
+        }
+        collected.values.sortedBy { it.distanceMeters }
+    }
+
     internal fun buildOverpassQuery(lat: Double, lng: Double, radiusMeters: Int): String {
         val latStr = String.format(Locale.US, "%.6f", lat)
         val lngStr = String.format(Locale.US, "%.6f", lng)
         return """
-            [out:json][timeout:20];
+            [out:json][timeout:18];
             (
-              nwr["leisure"="fitness_centre"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["leisure"="fitness_station"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["leisure"~"^(fitness_centre|fitness_station|sports_centre|stadium|track)$"](around:$radiusMeters,$latStr,$lngStr);
               nwr["amenity"="gym"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["leisure"="sports_centre"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["leisure"="stadium"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["leisure"="track"](around:$radiusMeters,$latStr,$lngStr);
               nwr["leisure"="swimming_pool"]["access"!="private"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["leisure"="park"]["name"](around:$radiusMeters,$latStr,$lngStr);
-              nwr["leisure"="pitch"]["name"](around:$radiusMeters,$latStr,$lngStr);
+              nwr["leisure"~"^(park|pitch)$"]["name"](around:$radiusMeters,$latStr,$lngStr);
             );
-            out center tags 180;
+            out center 150;
         """.trimIndent()
     }
 
@@ -322,21 +440,32 @@ class NearbySpotsRepository {
               nwr["name"~"$safeRegex",i]["amenity"="gym"](around:$radiusMeters,$latStr,$lngStr);
               nwr["sport"~"$safeRegex",i](around:${minOf(radiusMeters, 50_000)},$latStr,$lngStr);
             );
-            out center tags 60;
+            out center 60;
         """.trimIndent()
     }
 
     private fun executeOverpass(query: String): String {
         val endpoints = listOf(
             "https://overpass-api.de/api/interpreter",
+            "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+            "https://overpass.private.coffee/api/interpreter",
             "https://overpass.kumi.systems/api/interpreter"
         )
         var lastError: Throwable? = null
         val encoded = "data=" + URLEncoder.encode(query, "UTF-8")
         for (endpoint in endpoints) {
             try {
-                val body = postForm(endpoint, encoded)
-                if (body.isNotBlank()) return body
+                val body = postForm(endpoint, encoded).trim()
+                if (!body.startsWith("{")) {
+                    throw IllegalStateException("รูปแบบข้อมูลจากแผนที่ไม่ถูกต้อง")
+                }
+                val root = json.parseToJsonElement(body).jsonObject
+                val elements = root["elements"]?.jsonArray
+                val remark = root["remark"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (elements.isNullOrEmpty() && remark.contains("error", ignoreCase = true)) {
+                    throw IllegalStateException(remark)
+                }
+                return body
             } catch (t: Throwable) {
                 lastError = t
             }
@@ -512,6 +641,89 @@ class NearbySpotsRepository {
                 detailLabel = classification?.detailLabel
             )
         }
+    }
+
+    internal fun parsePhotonWorkoutSpots(
+        rawJson: String,
+        originLat: Double,
+        originLng: Double,
+        filterExerciseOnly: Boolean = true
+    ): List<WorkoutSpot> {
+        val root = json.parseToJsonElement(rawJson).jsonObject
+        val features = root["features"]?.jsonArray ?: return emptyList()
+        val seenKeys = HashSet<String>()
+        val result = mutableListOf<WorkoutSpot>()
+
+        val allowedLeisureValues = setOf(
+            "park", "fitness_centre", "fitness_station", "sports_centre",
+            "stadium", "track", "swimming_pool", "pitch", "recreation_ground"
+        )
+
+        for (featEl in features) {
+            val feat = featEl as? JsonObject ?: continue
+            val coords = feat["geometry"]?.jsonObject?.get("coordinates")?.jsonArray ?: continue
+            val lng = coords.getOrNull(0)?.jsonPrimitive?.doubleOrNull ?: continue
+            val lat = coords.getOrNull(1)?.jsonPrimitive?.doubleOrNull ?: continue
+            val props = feat["properties"] as? JsonObject ?: continue
+
+            val rawName = props["name"]?.jsonPrimitive?.contentOrNull?.trim()
+                ?.takeIf { it.isNotBlank() } ?: continue
+            val osmKey = props["osm_key"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val osmVal = props["osm_value"]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+            val isExerciseTag = (osmKey == "leisure" && osmVal in allowedLeisureValues) ||
+                (osmKey == "amenity" && osmVal == "gym") ||
+                (osmKey == "sport")
+
+            if (filterExerciseOnly && !isExerciseTag) continue
+
+            val (category, detailLabel, _, suggestedSport) = if (isExerciseTag) {
+                classifySpot(
+                    leisure = if (osmKey == "leisure") {
+                        if (osmVal == "recreation_ground") "park" else osmVal
+                    } else "",
+                    amenity = if (osmKey == "amenity") osmVal else "",
+                    sportTag = if (osmKey == "sport") osmVal else ""
+                )
+            } else {
+                val inferredCat = inferCategoryFromText(rawName)
+                SpotClassification(
+                    category = inferredCat,
+                    detailLabel = inferredCat.thaiLabel,
+                    fallbackName = rawName,
+                    suggestedSport = inferSportFromCategory(inferredCat, rawName)
+                )
+            }
+
+            val dedupKey = dedupKeyFor(rawName, lat, lng)
+            if (!seenKeys.add(dedupKey)) continue
+
+            val dist = haversineMeters(originLat, originLng, lat, lng).roundToInt().coerceAtLeast(1)
+            val street = props["street"]?.jsonPrimitive?.contentOrNull
+            val district = props["district"]?.jsonPrimitive?.contentOrNull
+                ?: props["locality"]?.jsonPrimitive?.contentOrNull
+                ?: props["city"]?.jsonPrimitive?.contentOrNull
+            val address = listOfNotNull(street, district)
+                .filter { it.isNotBlank() }
+                .joinToString(", ")
+                .ifBlank { null }
+            val osmId = props["osm_id"]?.jsonPrimitive?.contentOrNull ?: dedupKey.hashCode().toString()
+
+            result += WorkoutSpot(
+                id = "ph_${osmId}_$dist",
+                name = rawName,
+                category = category,
+                categoryDetailThai = detailLabel,
+                lat = lat,
+                lng = lng,
+                distanceMeters = dist,
+                addressSummary = address,
+                sportTags = if (osmKey == "sport") osmVal else null,
+                suggestedSport = suggestedSport
+            )
+        }
+
+        return result.sortedBy { it.distanceMeters }
     }
 
     private fun buildDirectFallbackRoute(
@@ -715,8 +927,8 @@ class NearbySpotsRepository {
     companion object {
         const val UNLIMITED_RADIUS_METERS = 0
         private const val MAX_QUERY_RADIUS_METERS = 150_000
-        private const val DEFAULT_THAILAND_LAT = 13.7563
-        private const val DEFAULT_THAILAND_LNG = 100.5018
+        const val DEFAULT_THAILAND_LAT = 13.7563
+        const val DEFAULT_THAILAND_LNG = 100.5018
 
         fun translateOsrmManeuverThai(type: String, modifier: String?, street: String): String {
             val roadSuffix = if (street.isNotBlank()) " เข้าสู่ $street" else ""
